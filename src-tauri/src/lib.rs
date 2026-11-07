@@ -1125,7 +1125,9 @@ pub fn run() {
             file_actions::file_tools,
             file_actions::file_action,
             file_actions::file_pick_folder,
-            file_actions::file_paste
+            file_actions::file_paste,
+            file_actions::file_rename,
+            file_actions::file_properties
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

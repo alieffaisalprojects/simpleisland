@@ -11,6 +11,11 @@
  * Paste yang menggantung sampai ditekan. Paste membuka dialog pilih folder, lalu
  * file ditempel ke folder itu (lihat `paste` dan `pasteRun`).
  *
+ * Rename dan Properti membuka tampilan sendiri di dalam panel (`view`):
+ *   "menu"   -> kotak-kotak aksi
+ *   "rename" -> kolom ganti nama (`renameRun`)
+ *   "props"  -> info properti (`propsState`)
+ *
  * Suara (lihat sounds.ts): choose saat kotak disorot, drop saat file dilepas,
  * checklist saat proses selesai.
  *
@@ -32,6 +37,9 @@ import { playSound, preloadSounds } from "./sounds";
 
 export type TileStatus = "running" | "done" | "error";
 
+// Tampilan panel
+export type PanelView = "menu" | "rename" | "props";
+
 interface RawMeta {
   path: string;
   name: string;
@@ -45,6 +53,36 @@ interface RawMeta {
 interface ActionResult {
   message: string;
   output?: string | null;
+}
+
+interface RenameResult {
+  message: string;
+  paths: string[];
+}
+
+// Properti dari Rust (file_properties)
+export interface FileProps {
+  count: number;
+  name: string;
+  location: string; // "" bila item berasal dari folder berbeda
+  isDir: boolean;
+  ext: string;
+  size: number;
+  files: number;
+  folders: number;
+  approx: boolean;
+  createdMs: number | null;
+  modifiedMs: number | null;
+  accessedMs: number | null;
+  readOnly: boolean;
+  hidden: boolean;
+  extra: string | null; // dimensi gambar / jumlah halaman PDF
+}
+
+export interface PropsState {
+  loading: boolean;
+  data?: FileProps;
+  error?: string;
 }
 
 export type PastePhase = "ready" | "picking" | "running" | "done" | "error";
@@ -70,7 +108,13 @@ const COPY_HOLD_MS = 550;
 const PASTE_DONE_MS = 1300;
 
 // Aksi instan: tidak perlu bunyi checklist (aksi lain = proses nyata, bunyi saat selesai)
-const QUIET_ACTIONS = new Set(["copy", "cut", "copy_path", "reveal", "terminal"]);
+const QUIET_ACTIONS = new Set([
+  "copy",
+  "cut",
+  "copy_path",
+  "reveal",
+  "terminal",
+]);
 
 const errorText = (e: unknown, fallback: string) =>
   typeof e === "string" && e ? e : fallback;
@@ -111,12 +155,16 @@ export function useFileIsland() {
   const [message, setMessage] = useState<string | null>(null);
   const [tools, setTools] = useState<FileTools>(NO_TOOLS);
   const [paste, setPaste] = useState<PendingPaste | null>(null);
+  const [view, setView] = useState<PanelView>("menu");
+  const [propsState, setPropsState] = useState<PropsState | null>(null);
 
   // Penanda urutan drag, supaya hasil async yang basi dibuang
   const seq = useRef(0);
+  const propsSeq = useRef(0); // sama, untuk pembacaan properti
   const closeTimer = useRef<number | undefined>(undefined);
   const pasteTimer = useRef<number | undefined>(undefined);
   const pasteBusy = useRef(false); // dialog / penempelan sedang berjalan
+  const renameBusy = useRef(false); // penggantian nama sedang berjalan
 
   // Kotak yang sedang disorot (untuk bunyi choose hanya saat berpindah kotak)
   const hoverRef = useRef<string | null>(null);
@@ -148,6 +196,7 @@ export function useFileIsland() {
   // Tutup dan buang semua (pil Paste tetap menggantung, tidak ikut dibuang)
   const clear = useCallback(() => {
     seq.current += 1;
+    propsSeq.current += 1;
     window.clearTimeout(closeTimer.current);
     hoverRef.current = null;
     setItems([]);
@@ -156,6 +205,54 @@ export function useFileIsland() {
     setArmedId(null);
     setStatus({});
     setMessage(null);
+    setView("menu");
+    setPropsState(null);
+  }, []);
+
+  // Buka tampilan Rename (fokus ke island supaya bisa mengetik)
+  const openRename = useCallback(() => {
+    window.clearTimeout(closeTimer.current);
+    setArmedId(null);
+    setStatus({});
+    setMessage(null);
+    setView("rename");
+    invoke("island_focus").catch(() => {});
+  }, []);
+
+  // Buka tampilan Properti dan ambil datanya dari Rust
+  const openProps = useCallback(async (list: FileItem[]) => {
+    const id = ++propsSeq.current;
+
+    window.clearTimeout(closeTimer.current);
+    setArmedId(null);
+    setStatus({});
+    setMessage(null);
+    setView("props");
+    setPropsState({ loading: true });
+
+    try {
+      const data = await invoke<FileProps>("file_properties", {
+        paths: list.map((i) => i.path),
+      });
+
+      if (id !== propsSeq.current) return;
+      setPropsState({ loading: false, data });
+    } catch (e) {
+      if (id !== propsSeq.current) return;
+      setPropsState({
+        loading: false,
+        error: errorText(e, "Gagal membaca properti"),
+      });
+    }
+  }, []);
+
+  // Kembali dari Rename / Properti ke menu kotak-kotak
+  const backToMenu = useCallback(() => {
+    propsSeq.current += 1;
+    setView("menu");
+    setPropsState(null);
+    setMessage(null);
+    setStatus({});
   }, []);
 
   // Jalankan satu aksi di Rust
@@ -165,6 +262,17 @@ export function useFileIsland() {
         (a) => a.id === actionId,
       );
       if (!action || list.length === 0) return;
+
+      // Rename dan Properti punya tampilan sendiri, bukan aksi satu klik
+      if (actionId === "rename") {
+        openRename();
+        return;
+      }
+
+      if (actionId === "props") {
+        void openProps(list);
+        return;
+      }
 
       window.clearTimeout(closeTimer.current);
       setArmedId(null);
@@ -195,7 +303,7 @@ export function useFileIsland() {
         setMessage(errorText(e, "Aksi gagal"));
       }
     },
-    [clear],
+    [clear, openRename, openProps],
   );
 
   const executeRef = useRef(execute);
@@ -207,6 +315,43 @@ export function useFileIsland() {
       void execute(actionId, itemsRef.current);
     },
     [execute],
+  );
+
+  // Tombol "Ganti nama" di tampilan Rename
+  const renameRun = useCallback(
+    async (newName: string) => {
+      const list = itemsRef.current;
+      if (list.length === 0 || renameBusy.current) return;
+
+      renameBusy.current = true;
+      window.clearTimeout(closeTimer.current);
+      setMessage(null);
+      setStatus({ rename: "running" });
+
+      try {
+        const res = await invoke<RenameResult>("file_rename", {
+          paths: list.map((i) => i.path),
+          newName,
+        });
+
+        // Path berubah: baca ulang supaya island menampilkan nama baru
+        const fresh = await inspect(res.paths).catch(() => [] as FileItem[]);
+        if (fresh.length > 0) setItems(fresh);
+
+        setView("menu");
+        setStatus({ rename: "done" });
+        setMessage(res.message);
+        playSound("checklist");
+        closeTimer.current = window.setTimeout(clear, CLOSE_AFTER_DONE_MS);
+      } catch (e) {
+        // Tetap di tampilan Rename supaya nama bisa diperbaiki
+        setStatus({});
+        setMessage(errorText(e, "Gagal mengganti nama"));
+      } finally {
+        renameBusy.current = false;
+      }
+    },
+    [clear],
   );
 
   // Tombol Paste: pilih folder, lalu tempel file ke sana
@@ -230,10 +375,16 @@ export function useFileIsland() {
       let dest: string | null;
 
       try {
-        dest = await invoke<string | null>("file_pick_folder", { start: paths[0] });
+        dest = await invoke<string | null>("file_pick_folder", {
+          start: paths[0],
+        });
       } catch (e) {
         if (stale()) return;
-        setPaste({ ...cur, phase: "error", message: errorText(e, "Gagal membuka dialog") });
+        setPaste({
+          ...cur,
+          phase: "error",
+          message: errorText(e, "Gagal membuka dialog"),
+        });
         return;
       }
 
@@ -258,10 +409,18 @@ export function useFileIsland() {
 
         playSound("checklist");
         setPaste({ ...cur, phase: "done", dest, message: res.message });
-        pasteTimer.current = window.setTimeout(() => setPaste(null), PASTE_DONE_MS);
+        pasteTimer.current = window.setTimeout(
+          () => setPaste(null),
+          PASTE_DONE_MS,
+        );
       } catch (e) {
         if (stale()) return;
-        setPaste({ ...cur, phase: "error", dest, message: errorText(e, "Gagal menempel") });
+        setPaste({
+          ...cur,
+          phase: "error",
+          dest,
+          message: errorText(e, "Gagal menempel"),
+        });
       }
     } finally {
       pasteBusy.current = false;
@@ -309,10 +468,13 @@ export function useFileIsland() {
               const list = await inspect(p.paths);
               if (id !== seq.current || list.length === 0) return; // sudah dibatalkan / dilepas
 
+              propsSeq.current += 1;
               setItems(list);
               setStatus({});
               setMessage(null);
               setArmedId(null);
+              setView("menu");
+              setPropsState(null);
               setHovering(true);
               setHover(actionAt(p.position));
             } catch (e) {
@@ -399,9 +561,13 @@ export function useFileIsland() {
     status,
     message,
     paste,
+    view,
+    propsState,
     active: hovering || items.length > 0,
     run,
     clear,
+    back: backToMenu,
+    renameRun,
     pasteRun,
     pasteDismiss,
   };

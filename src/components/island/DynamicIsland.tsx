@@ -825,7 +825,11 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             armedId={fileIsland.armedId}
             status={fileIsland.status}
             message={fileIsland.message}
+            view={fileIsland.view}
+            propsState={fileIsland.propsState}
             onRun={fileIsland.run}
+            onRename={fileIsland.renameRun}
+            onBack={fileIsland.back}
             onClose={fileIsland.clear}
           />
         </MorphLayer>

@@ -6,12 +6,16 @@
  * Menambah aksi baru:
  *  1. tambahkan di buildActions() di bawah (id + label + ikon),
  *  2. tangani id yang sama di `run_action` pada file_actions.rs.
+ *
+ * Catatan: aksi "rename" dan "props" tidak lewat `run_action`; keduanya membuka
+ * tampilan sendiri di panel (lihat useFileIsland.ts).
  */
 
 import {
   Archive,
   Copy,
   Download,
+  Eraser,
   File as FileIcon,
   FileCode,
   FileText,
@@ -19,9 +23,11 @@ import {
   Folder,
   FolderOpen,
   Image as ImageIcon,
+  Info,
   Link as LinkIcon,
   Minimize2,
   Music,
+  Pencil,
   RotateCw,
   Scissors,
   Terminal,
@@ -70,10 +76,43 @@ const EXT: Record<Exclude<FileKind, "folder" | "other">, string[]> = {
   audio: ["mp3", "wav", "flac", "m4a", "ogg", "aac", "wma", "opus"],
   archive: ["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz"],
   pdf: ["pdf"],
-  doc: ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "csv", "md", "odt"],
+  doc: [
+    "doc",
+    "docx",
+    "xls",
+    "xlsx",
+    "ppt",
+    "pptx",
+    "txt",
+    "rtf",
+    "csv",
+    "md",
+    "odt",
+  ],
   code: [
-    "js", "ts", "tsx", "jsx", "rs", "py", "html", "css", "json", "java", "c",
-    "cpp", "cs", "go", "php", "sh", "bat", "ps1", "toml", "yml", "yaml", "xml", "sql",
+    "js",
+    "ts",
+    "tsx",
+    "jsx",
+    "rs",
+    "py",
+    "html",
+    "css",
+    "json",
+    "java",
+    "c",
+    "cpp",
+    "cs",
+    "go",
+    "php",
+    "sh",
+    "bat",
+    "ps1",
+    "toml",
+    "yml",
+    "yaml",
+    "xml",
+    "sql",
   ],
 };
 
@@ -177,7 +216,10 @@ const IMAGE_TARGETS: [string, string][] = [
 ];
 
 // Susun kotak aksi sesuai isi yang diseret (satu atau banyak item)
-export function buildActions(items: FileItem[], tools: FileTools): FileAction[] {
+export function buildActions(
+  items: FileItem[],
+  tools: FileTools,
+): FileAction[] {
   if (items.length === 0) return [];
 
   const out: FileAction[] = [];
@@ -205,6 +247,12 @@ export function buildActions(items: FileItem[], tools: FileTools): FileAction[] 
       }
       out.push(act("img_pdf", single ? "PDF" : "Satu PDF", FileText, "accent"));
       out.push(act("img_shrink", "Compress", Minimize2, "accent"));
+      out.push(act("img_rmbg", "Hapus BG", Eraser, "accent"));
+      out.push(act("zip", "ZIP", Archive, "accent"));
+      break;
+
+    case "pdf":
+      out.push(act("pdf_shrink", "Compress", Minimize2, "accent"));
       out.push(act("zip", "ZIP", Archive, "accent"));
       break;
 
@@ -235,15 +283,16 @@ export function buildActions(items: FileItem[], tools: FileTools): FileAction[] 
       break;
 
     default:
-      // pdf, dokumen, kode, campuran, tak dikenal
+      // dokumen, kode, campuran, tak dikenal
       out.push(act("zip", "ZIP", Archive, "accent"));
       break;
   }
 
-  // Aksi umum selalu di baris paling akhir
+  // Aksi umum selalu di baris paling akhir (berlaku untuk semua jenis file)
   out.push(act("copy", "Salin", Copy));
   out.push(act("cut", "Potong", Scissors));
-  if (single) out.push(act("reveal", "Lokasi", FolderOpen));
+  out.push(act("rename", "Rename", Pencil));
+  out.push(act("props", "Properti", Info));
   out.push(act("trash", "Hapus", Trash2, "danger"));
 
   return out;
