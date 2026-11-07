@@ -34,6 +34,12 @@ export function getFilePanelSize(actionCount: number): {
   };
 }
 
+// Tulisan saat kotak ini disorot ketika file diseret
+const HOVER_HINT: Record<string, string> = {
+  copy: "+ Copy",
+  cut: "Move",
+};
+
 const TONE: Record<FileAction["tone"], string> = {
   neutral: "bg-white/[0.09] text-white/90",
   accent: "bg-sky-400/[0.17] text-sky-100",
@@ -139,7 +145,12 @@ export const FileActionsPanel: React.FC<FileActionsPanelProps> = ({
   const KindIcon = KIND_ICON[kind];
 
   // Keterangan di bawah judul berganti sesuai keadaan
-  const hint = message ?? (hovering ? "Lepas di salah satu kotak" : subtitle);
+  // (saat Salin / Potong disorot: "+ Copy" / "Move", seperti saat menyeret file di Windows)
+  const hint =
+    message ??
+    (hovering
+      ? ((hoverId && HOVER_HINT[hoverId]) ?? "Lepas di salah satu kotak")
+      : subtitle);
 
   return (
     <div

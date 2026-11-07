@@ -5,6 +5,8 @@
 //!   file_inspect(paths)         -> info tiap item (folder atau file, ukuran, ekstensi)
 //!   file_tools()                -> alat tambahan yang terpasang (WinRAR, 7-Zip, ffmpeg)
 //!   file_action(action, paths)  -> menjalankan satu aksi (id sama dengan catalog.ts)
+//!   file_pick_folder(start)     -> dialog pilih folder tujuan (tombol Paste di island)
+//!   file_paste(paths, dest, cut)-> salin / pindahkan file ke folder yang dipilih
 //!
 //! Cara kerja aksi:
 //!   - gambar      : crate `image` (PNG, JPG, WebP, BMP) + penulis PDF sederhana
@@ -21,6 +23,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+
+use tauri::WebviewWindow;
+use tauri_plugin_dialog::DialogExt;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -93,6 +98,53 @@ pub async fn file_tools() -> FileTools {
 #[tauri::command]
 pub async fn file_action(action: String, paths: Vec<String>) -> Result<ActionResult, String> {
     tauri::async_runtime::spawn_blocking(move || run_action(&action, &paths))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+// Dialog pilih folder tujuan. `None` bila dibatalkan.
+// Dibuka sebagai anak window island supaya muncul di atasnya (island selalu di depan).
+#[tauri::command]
+pub async fn file_pick_folder(
+    window: WebviewWindow,
+    start: Option<String>,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = window
+            .dialog()
+            .file()
+            .set_title("Pilih folder tujuan")
+            .set_parent(&window);
+
+        // Mulai dari folder asal file
+        if let Some(s) = start {
+            let dir = parent_dir(Path::new(&s));
+
+            if dir.is_dir() {
+                dialog = dialog.set_directory(dir);
+            }
+        }
+
+        match dialog.blocking_pick_folder() {
+            Some(chosen) => chosen
+                .into_path()
+                .map(|p| Some(p.to_string_lossy().to_string()))
+                .map_err(|e| e.to_string()),
+            None => Ok(None),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// Tempel: salin (atau pindahkan bila `cut`) semua item ke folder `dest`
+#[tauri::command]
+pub async fn file_paste(
+    paths: Vec<String>,
+    dest: String,
+    cut: bool,
+) -> Result<ActionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || paste_into(&paths, &dest, cut))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -441,6 +493,162 @@ fn open_terminal(path: &str) -> Result<(), String> {
     hide_window(&mut cmd);
 
     cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Tempel (Paste) ke folder pilihan
+// ---------------------------------------------------------------------------
+
+// Nama tujuan di `dir`. Bila sudah dipakai, pola Explorer:
+// "foto - Copy.png", "foto - Copy (2).png" ...
+fn paste_target(dir: &Path, src: &Path) -> PathBuf {
+    let name = src.file_name().unwrap_or_default();
+    let direct = dir.join(name);
+
+    if !direct.exists() {
+        return direct;
+    }
+
+    let (stem, ext) = if src.is_dir() {
+        (name.to_string_lossy().to_string(), String::new())
+    } else {
+        (
+            src.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            src.extension()
+                .map(|e| e.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        )
+    };
+
+    let mut n = 1u32;
+
+    loop {
+        let label = if n == 1 {
+            format!("{stem} - Copy")
+        } else {
+            format!("{stem} - Copy ({n})")
+        };
+
+        let full = if ext.is_empty() {
+            label
+        } else {
+            format!("{label}.{ext}")
+        };
+
+        let candidate = dir.join(full);
+
+        if !candidate.exists() {
+            return candidate;
+        }
+
+        n += 1;
+    }
+}
+
+// Salin file atau seluruh isi folder. Tautan simbolik / junction di dalam folder
+// dilewati supaya tidak berputar tanpa ujung (mis. "Application Data" di profil user).
+fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        fs::create_dir_all(dst)?;
+
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+
+            if entry.file_type()?.is_symlink() {
+                continue;
+            }
+
+            copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+
+        Ok(())
+    } else {
+        fs::copy(src, dst).map(|_| ())
+    }
+}
+
+fn remove_any(p: &Path) -> std::io::Result<()> {
+    if p.is_dir() {
+        fs::remove_dir_all(p)
+    } else {
+        fs::remove_file(p)
+    }
+}
+
+fn paste_into(paths: &[String], dest: &str, cut: bool) -> Result<ActionResult, String> {
+    if paths.is_empty() {
+        return Err("Tidak ada file".to_string());
+    }
+
+    let dest_dir = Path::new(dest);
+
+    if !dest_dir.is_dir() {
+        return Err("Folder tujuan tidak ditemukan".to_string());
+    }
+
+    let dest_real = fs::canonicalize(dest_dir).unwrap_or_else(|_| dest_dir.to_path_buf());
+    let mut last: Option<PathBuf> = None;
+    let mut count = 0usize;
+
+    for p in paths {
+        let src = Path::new(p);
+
+        if !src.exists() {
+            return Err(format!("Tidak ditemukan: {}", file_label(src)));
+        }
+
+        let src_real = fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+
+        // Folder tidak boleh ditempel ke dalam dirinya sendiri
+        if src_real.is_dir() && dest_real.starts_with(&src_real) {
+            return Err(format!(
+                "Folder \"{}\" tidak bisa ditempel ke dalam dirinya sendiri",
+                file_label(src)
+            ));
+        }
+
+        // Dipindah ke folder yang sama: tidak ada yang perlu dilakukan
+        if cut && src_real.parent() == Some(dest_real.as_path()) {
+            count += 1;
+            last = Some(src.to_path_buf());
+            continue;
+        }
+
+        let target = paste_target(dest_dir, src);
+
+        if cut {
+            // Pindah di drive yang sama itu instan; antar drive jatuh ke salin + hapus
+            if fs::rename(src, &target).is_err() {
+                let moved = copy_recursive(src, &target).and_then(|_| remove_any(src));
+
+                if let Err(e) = moved {
+                    let _ = remove_any(&target); // buang hasil setengah jadi
+                    return Err(format!("{}: {e}", file_label(src)));
+                }
+            }
+        } else if let Err(e) = copy_recursive(src, &target) {
+            let _ = remove_any(&target);
+            return Err(format!("{}: {e}", file_label(src)));
+        }
+
+        count += 1;
+        last = Some(target);
+    }
+
+    let folder = match file_label(dest_dir) {
+        name if name.is_empty() => dest.to_string(), // akar drive, mis. "D:\"
+        name => name,
+    };
+
+    let message = if count == 1 {
+        format!("Ditempel ke {folder}")
+    } else {
+        format!("{count} item ditempel ke {folder}")
+    };
+
+    Ok(done(message, last.as_deref()))
 }
 
 // ---------------------------------------------------------------------------

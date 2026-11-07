@@ -1066,6 +1066,23 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Suara island (choose / drop / checklist) diputar dari WebView saat file diseret
+    // dari Explorer. Tanpa klik apa pun di window, WebView2 biasanya memblokir audio
+    // (kebijakan autoplay), jadi izinkan. Harus dipanggil sebelum WebView dibuat.
+    #[cfg(windows)]
+    {
+        const AUTOPLAY: &str = "--autoplay-policy=no-user-gesture-required";
+
+        let args = match std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+            Ok(old) if !old.contains("--autoplay-policy") => format!("{old} {AUTOPLAY}"),
+            Ok(old) => old,
+            Err(_) => AUTOPLAY.to_string(),
+        };
+
+        // Aman: masih satu thread, belum ada WebView / thread lain yang berjalan
+        unsafe { std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", args) };
+    }
+
     tauri::Builder::default()
         // Single instance harus didaftarkan pertama.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -1076,6 +1093,8 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_opener::init())
+        // Dialog pilih folder untuk tombol Paste di island
+        .plugin(tauri_plugin_dialog::init())
         .on_menu_event(|app, event| {
             handle_menu_event(app, event.id().as_ref());
         })
@@ -1104,7 +1123,9 @@ pub fn run() {
             island_focus,
             file_actions::file_inspect,
             file_actions::file_tools,
-            file_actions::file_action
+            file_actions::file_action,
+            file_actions::file_pick_folder,
+            file_actions::file_paste
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

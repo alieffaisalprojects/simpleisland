@@ -7,6 +7,13 @@
  *   drop  -> dilepas di kotak = aksi langsung jalan; dilepas di tempat lain = menu tetap terbuka
  *   leave -> dibatalkan, island menutup
  *
+ * Salin / Potong tidak langsung menutup island: island mengecil jadi pil dengan tombol
+ * Paste yang menggantung sampai ditekan. Paste membuka dialog pilih folder, lalu
+ * file ditempel ke folder itu (lihat `paste` dan `pasteRun`).
+ *
+ * Suara (lihat sounds.ts): choose saat kotak disorot, drop saat file dilepas,
+ * checklist saat proses selesai.
+ *
  * Kotak ditemukan lewat atribut data-action-id di DOM (lihat FileActionsPanel),
  * jadi hook ini tidak perlu tahu bentuk tampilannya.
  */
@@ -21,6 +28,7 @@ import {
   type FileItem,
   type FileTools,
 } from "./catalog";
+import { playSound, preloadSounds } from "./sounds";
 
 export type TileStatus = "running" | "done" | "error";
 
@@ -39,10 +47,33 @@ interface ActionResult {
   output?: string | null;
 }
 
+export type PastePhase = "ready" | "picking" | "running" | "done" | "error";
+
+// File yang sudah disalin / dipotong dan menunggu tombol Paste ditekan
+export interface PendingPaste {
+  items: FileItem[];
+  mode: "copy" | "cut";
+  phase: PastePhase;
+  dest?: string; // folder tujuan yang dipilih
+  message?: string; // pesan hasil / error
+}
+
 const NO_TOOLS: FileTools = { rar: false, sevenZip: false, ffmpeg: false };
 
 // Setelah aksi sukses, island menutup sendiri setelah jeda singkat
 const CLOSE_AFTER_DONE_MS = 1100;
+
+// Salin / potong: ceklis sebentar, lalu island mengecil jadi pil Paste
+const COPY_HOLD_MS = 550;
+
+// Pil Paste menutup sendiri setelah file berhasil ditempel
+const PASTE_DONE_MS = 1300;
+
+// Aksi instan: tidak perlu bunyi checklist (aksi lain = proses nyata, bunyi saat selesai)
+const QUIET_ACTIONS = new Set(["copy", "cut", "copy_path", "reveal", "terminal"]);
+
+const errorText = (e: unknown, fallback: string) =>
+  typeof e === "string" && e ? e : fallback;
 
 async function inspect(paths: string[]): Promise<FileItem[]> {
   const metas = await invoke<RawMeta[]>("file_inspect", { paths });
@@ -79,10 +110,19 @@ export function useFileIsland() {
   const [status, setStatus] = useState<Record<string, TileStatus>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [tools, setTools] = useState<FileTools>(NO_TOOLS);
+  const [paste, setPaste] = useState<PendingPaste | null>(null);
 
   // Penanda urutan drag, supaya hasil async yang basi dibuang
   const seq = useRef(0);
   const closeTimer = useRef<number | undefined>(undefined);
+  const pasteTimer = useRef<number | undefined>(undefined);
+  const pasteBusy = useRef(false); // dialog / penempelan sedang berjalan
+
+  // Kotak yang sedang disorot (untuk bunyi choose hanya saat berpindah kotak)
+  const hoverRef = useRef<string | null>(null);
+
+  const pasteRef = useRef(paste);
+  pasteRef.current = paste;
 
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -95,10 +135,21 @@ export function useFileIsland() {
     [items, tools],
   );
 
-  // Tutup dan buang semua
+  // Sorot kotak; bunyi choose tiap berpindah ke kotak baru
+  const setHover = useCallback((id: string | null) => {
+    if (hoverRef.current === id) return;
+
+    hoverRef.current = id;
+    setHoverId(id);
+
+    if (id) playSound("choose");
+  }, []);
+
+  // Tutup dan buang semua (pil Paste tetap menggantung, tidak ikut dibuang)
   const clear = useCallback(() => {
     seq.current += 1;
     window.clearTimeout(closeTimer.current);
+    hoverRef.current = null;
     setItems([]);
     setHovering(false);
     setHoverId(null);
@@ -128,10 +179,20 @@ export function useFileIsland() {
 
         setStatus({ [actionId]: "done" });
         setMessage(res.message);
+
+        if (actionId === "copy" || actionId === "cut") {
+          // Tombol Paste menggantung di island sampai ditekan
+          window.clearTimeout(pasteTimer.current);
+          setPaste({ items: list, mode: actionId, phase: "ready" });
+          closeTimer.current = window.setTimeout(clear, COPY_HOLD_MS);
+          return;
+        }
+
+        if (!QUIET_ACTIONS.has(actionId)) playSound("checklist");
         closeTimer.current = window.setTimeout(clear, CLOSE_AFTER_DONE_MS);
       } catch (e) {
         setStatus({ [actionId]: "error" });
-        setMessage(typeof e === "string" ? e : "Aksi gagal");
+        setMessage(errorText(e, "Aksi gagal"));
       }
     },
     [clear],
@@ -147,6 +208,79 @@ export function useFileIsland() {
     },
     [execute],
   );
+
+  // Tombol Paste: pilih folder, lalu tempel file ke sana
+  const pasteRun = useCallback(async () => {
+    const cur = pasteRef.current;
+    if (!cur) return;
+    if (cur.phase !== "ready" && cur.phase !== "error") return;
+    if (pasteBusy.current) return;
+
+    pasteBusy.current = true;
+    window.clearTimeout(pasteTimer.current);
+
+    const paths = cur.items.map((i) => i.path);
+
+    // Hasil async dibuang bila pil sudah diganti (disalin ulang / ditutup)
+    const stale = () => pasteRef.current?.items !== cur.items;
+
+    try {
+      setPaste({ ...cur, phase: "picking", message: undefined });
+
+      let dest: string | null;
+
+      try {
+        dest = await invoke<string | null>("file_pick_folder", { start: paths[0] });
+      } catch (e) {
+        if (stale()) return;
+        setPaste({ ...cur, phase: "error", message: errorText(e, "Gagal membuka dialog") });
+        return;
+      }
+
+      if (stale()) return;
+
+      // Dialog dibatalkan: pil tetap menggantung
+      if (!dest) {
+        setPaste({ ...cur, phase: "ready" });
+        return;
+      }
+
+      setPaste({ ...cur, phase: "running", dest, message: undefined });
+
+      try {
+        const res = await invoke<ActionResult>("file_paste", {
+          paths,
+          dest,
+          cut: cur.mode === "cut",
+        });
+
+        if (stale()) return;
+
+        playSound("checklist");
+        setPaste({ ...cur, phase: "done", dest, message: res.message });
+        pasteTimer.current = window.setTimeout(() => setPaste(null), PASTE_DONE_MS);
+      } catch (e) {
+        if (stale()) return;
+        setPaste({ ...cur, phase: "error", dest, message: errorText(e, "Gagal menempel") });
+      }
+    } finally {
+      pasteBusy.current = false;
+    }
+  }, []);
+
+  // Tutup pil Paste tanpa menempel
+  const pasteDismiss = useCallback(() => {
+    const cur = pasteRef.current;
+    if (!cur || cur.phase === "picking" || cur.phase === "running") return;
+
+    window.clearTimeout(pasteTimer.current);
+    setPaste(null);
+  }, []);
+
+  // Siapkan suara sekali saja
+  useEffect(() => {
+    void preloadSounds();
+  }, []);
 
   // Cek alat tambahan (WinRAR, 7-Zip, ffmpeg) sekali saja
   useEffect(() => {
@@ -180,7 +314,7 @@ export function useFileIsland() {
               setMessage(null);
               setArmedId(null);
               setHovering(true);
-              setHoverId(actionAt(p.position));
+              setHover(actionAt(p.position));
             } catch (e) {
               console.error("Gagal membaca file yang diseret:", e);
             }
@@ -188,7 +322,7 @@ export function useFileIsland() {
           }
 
           case "over":
-            setHoverId(actionAt(p.position));
+            setHover(actionAt(p.position));
             break;
 
           case "leave":
@@ -204,6 +338,8 @@ export function useFileIsland() {
             window.clearTimeout(closeTimer.current);
             const id = ++seq.current;
 
+            playSound("drop");
+
             try {
               let list = itemsRef.current;
               if (!samePaths(list, p.paths)) list = await inspect(p.paths);
@@ -213,6 +349,7 @@ export function useFileIsland() {
               setStatus({});
               setMessage(null);
               setHovering(false);
+              hoverRef.current = null;
               setHoverId(null);
 
               // Beri fokus supaya klik di luar menutup island seperti biasa
@@ -243,9 +380,15 @@ export function useFileIsland() {
       cancelled = true;
       unlisten?.();
     };
-  }, [clear]);
+  }, [clear, setHover]);
 
-  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(closeTimer.current);
+      window.clearTimeout(pasteTimer.current);
+    },
+    [],
+  );
 
   return {
     items,
@@ -255,9 +398,12 @@ export function useFileIsland() {
     armedId,
     status,
     message,
+    paste,
     active: hovering || items.length > 0,
     run,
     clear,
+    pasteRun,
+    pasteDismiss,
   };
 }
 

@@ -25,6 +25,7 @@ import {
 import { TimerCompact, TimerExpanded, TimerPill } from "./ClockTimerView";
 import { SystemWidget } from "../modules/SystemWidget";
 import { FileActionsPanel, getFilePanelSize } from "./file/FileActionsPanel";
+import { FilePastePill, PASTE_PILL_WIDTH } from "./file/FilePastePill";
 import { useFileIsland } from "./file/useFileIsland";
 
 interface DynamicIslandProps {
@@ -44,7 +45,7 @@ interface DynamicIslandProps {
   onSelectWidget: (widget: ActiveWidget) => void;
 }
 
-type IslandKind = "file" | "system" | "timer" | "music" | "idle";
+type IslandKind = "file" | "paste" | "system" | "timer" | "music" | "idle";
 type SecondaryKind = "timer" | "music" | null;
 type Pick = "timer" | "music";
 
@@ -253,11 +254,13 @@ const swapFade = {
 // Aktivitas utama
 function getKind(
   hasFile: boolean,
+  hasPaste: boolean,
   hasSystem: boolean,
   timerFocused: boolean,
   isMusic: boolean,
 ): IslandKind {
   if (hasFile) return "file";
+  if (hasPaste) return "paste"; // tombol Paste menggantung sampai ditekan
   if (hasSystem) return "system";
   if (timerFocused) return "timer";
   if (isMusic) return "music";
@@ -282,6 +285,7 @@ function getCompactWidth(
   lyricsMode: boolean,
 ): number {
   if (isMini) return S.mini.width;
+  if (kind === "paste") return PASTE_PILL_WIDTH;
   if (kind === "music") {
     return lyricsMode ? S.lyricsMini.width : S.compact.width;
   }
@@ -373,7 +377,13 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     !file && !system && timerOn && (pick === "timer" || !hasMedia);
   const isMusic = !file && !system && hasMedia && !timerFocused;
 
-  const kind = getKind(Boolean(file), Boolean(system), timerFocused, isMusic);
+  const kind = getKind(
+    Boolean(file),
+    Boolean(fileIsland.paste),
+    Boolean(system),
+    timerFocused,
+    isMusic,
+  );
   const secondary = getSecondary(kind, timerOn, hasMedia);
 
   const showSecondary = Boolean(secondary) && !expanded && !forceMini;
@@ -396,7 +406,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     width: expanded ? expandedWidth : compactWidth,
     height: expanded ? expandedHeight : collapsedHeight,
     borderRadius: expanded ? 40 : collapsedHeight / 2,
-    scale: getPressScale(pressed, expanded),
+    // Pil Paste tidak ikut mengecil saat tombolnya ditekan
+    scale: getPressScale(pressed && kind !== "paste", expanded),
   };
 
   const spring = expanded ? SPRING_EXPAND : SPRING_COLLAPSE;
@@ -569,9 +580,9 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     };
   }, []);
 
-  // Tutup island jika tidak ada aktivitas
+  // Tutup island jika tidak ada aktivitas (pil Paste selalu compact)
   useEffect(() => {
-    if (kind === "idle") setExpanded(false);
+    if (kind === "idle" || kind === "paste") setExpanded(false);
   }, [kind]);
 
   // ---- File diseret ke island ----
@@ -898,6 +909,19 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
       );
     }
 
+    // File sudah disalin / dipotong: tombol Paste menggantung
+    if (kind === "paste" && fileIsland.paste && !isMini) {
+      return (
+        <motion.div key="paste" className="relative h-full w-full" {...swapFade}>
+          <FilePastePill
+            paste={fileIsland.paste}
+            onPaste={fileIsland.pasteRun}
+            onDismiss={fileIsland.pasteDismiss}
+          />
+        </motion.div>
+      );
+    }
+
     // Notifikasi sistem
     if (kind === "system" && system) {
       return (
@@ -1048,7 +1072,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         animate={anim}
         transition={spring}
         onClick={() => {
-          if (kind === "idle") return;
+          if (kind === "idle" || kind === "paste") return;
           if (lockedRef.current) return; // terkunci: jangan menutup
           setExpanded((v) => !v);
         }}
