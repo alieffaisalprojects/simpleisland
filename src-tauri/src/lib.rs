@@ -1,4 +1,5 @@
 mod island_native; // Timer Clock Windows dan HTTP request
+mod file_actions; // Aksi file untuk drag & drop ke island
 
 use base64::{engine::general_purpose, Engine as _};
 use std::sync::Mutex;
@@ -95,6 +96,12 @@ fn place_island(window: &WebviewWindow, logical_height: f64) -> Result<(), Strin
 #[tauri::command]
 fn island_set_height(window: WebviewWindow, height: f64) -> Result<(), String> {
     place_island(&window, height.clamp(40.0, 600.0))
+}
+
+// Beri fokus ke island (dipakai setelah file dilepas, agar klik di luar menutupnya)
+#[tauri::command]
+fn island_focus(window: WebviewWindow) {
+    let _ = window.set_focus();
 }
 
 // ---------------------------------------------------------------------------
@@ -751,19 +758,43 @@ mod hit_test {
         (unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000) != 0
     }
 
+    // Zona tangkap drag file: saat file diseret dari luar, area di tengah atas ini
+    // ikut menerima event drag walau pil island masih kecil.
+    const DROP_ZONE_W: f64 = 320.0;
+    const DROP_ZONE_H: f64 = 60.0;
+
+    fn drop_zone(island: HWND) -> Option<RECT> {
+        let mut win = RECT::default();
+
+        if unsafe { GetWindowRect(island, &mut win) }.is_err() {
+            return None;
+        }
+
+        let dpi = unsafe { GetDpiForWindow(island) };
+        let scale = if dpi == 0 { 1.0 } else { dpi as f64 / 96.0 };
+
+        let win_w = (win.right - win.left) as f64;
+        let zone_w = DROP_ZONE_W * scale;
+        let left = win.left + ((win_w - zone_w) / 2.0).max(0.0) as i32;
+
+        Some(RECT {
+            left,
+            top: win.top,
+            right: left + zone_w as i32,
+            bottom: win.top + (DROP_ZONE_H * scale) as i32,
+        })
+    }
+
     // Pantau area klik island.
     pub fn start(window: WebviewWindow, hwnd_raw: isize) {
         std::thread::spawn(move || {
             let island = HWND(hwnd_raw as *mut c_void);
             let mut ignoring: Option<bool> = None;
+            let mut was_down = false;
+            let mut press_inside = false;
 
             loop {
                 std::thread::sleep(Duration::from_millis(POLL_MS));
-
-                // Jangan ubah status saat mouse sedang ditekan.
-                if left_button_down() {
-                    continue;
-                }
 
                 let mut pt = POINT::default();
 
@@ -772,7 +803,27 @@ mod hit_test {
                 }
 
                 let inside = point_in_any(&pt, &screen_rects(island));
-                let want_ignore = !inside;
+                let down = left_button_down();
+
+                // Catat apakah tekanan mouse dimulai di dalam pil
+                if down && !was_down {
+                    press_inside = inside;
+                }
+                was_down = down;
+
+                // Klik yang dimulai di dalam pil (slider, tombol): jangan ubah status sampai dilepas
+                if down && press_inside {
+                    continue;
+                }
+
+                // Tombol ditekan dari luar (mis. menyeret file dari Explorer):
+                // zona tangkap ikut aktif supaya island bisa menerima drag
+                let catch = down
+                    && drop_zone(island)
+                        .map(|zone| point_in_any(&pt, &[zone]))
+                        .unwrap_or(false);
+
+                let want_ignore = !(inside || catch);
 
                 if ignoring != Some(want_ignore)
                     && window.set_ignore_cursor_events(want_ignore).is_ok()
@@ -1048,9 +1099,12 @@ pub fn run() {
             island_show_menu,
             island_native::http_request,
             island_native::clock_dump,
-             island_native::http_request,
             island_native::clock_timer_toggle,
-            island_native::clock_timer_cancel
+            island_native::clock_timer_cancel,
+            island_focus,
+            file_actions::file_inspect,
+            file_actions::file_tools,
+            file_actions::file_action
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

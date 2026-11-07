@@ -24,6 +24,8 @@ import {
 } from "./SpotifyWidget";
 import { TimerCompact, TimerExpanded, TimerPill } from "./ClockTimerView";
 import { SystemWidget } from "../modules/SystemWidget";
+import { FileActionsPanel, getFilePanelSize } from "./file/FileActionsPanel";
+import { useFileIsland } from "./file/useFileIsland";
 
 interface DynamicIslandProps {
   activeWidget: ActiveWidget;
@@ -291,6 +293,7 @@ function getCompactWidth(
 function getExpandedSize(
   kind: IslandKind,
   lyricsMode: boolean,
+  filePanel: { width: number; height: number },
 ): { width: number; height: number } {
   switch (kind) {
     case "music": {
@@ -298,7 +301,7 @@ function getExpandedSize(
       return { width: size.width, height: size.height };
     }
     case "file":
-      return { width: 340, height: 142 };
+      return filePanel;
     case "timer":
       return { width: 340, height: 80 };
     default:
@@ -311,50 +314,6 @@ function getPressScale(pressed: boolean, expanded: boolean): number {
   return expanded ? 0.988 : 0.96;
 }
 
-// Kartu file (expanded)
-const FileCard: React.FC<{
-  file: DroppedFile;
-  onAction: (a: string) => void;
-}> = ({ file, onAction }) => (
-  <div className="flex h-full w-full flex-col justify-center px-5 text-white">
-    <div className="flex items-center gap-3">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">
-        <File size={20} />
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <div className="text-[9px] font-semibold uppercase tracking-[.15em] text-white/45">
-          File detected
-        </div>
-        <div className="truncate text-sm font-semibold">{file.name}</div>
-        <div className="text-[10px] text-white/45">
-          {file.size} · {file.extension}
-        </div>
-      </div>
-
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onAction("open");
-        }}
-        className="rounded-full bg-white px-3 py-1.5 text-[10px] font-semibold text-black"
-      >
-        Open
-      </button>
-    </div>
-
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        onAction("dismiss");
-      }}
-      className="mt-4 self-end text-[10px] text-white/45"
-    >
-      Dismiss
-    </button>
-  </div>
-);
-
 export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   activeWidget,
   track,
@@ -363,8 +322,6 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   onSeek,
   clockTimer,
   lyrics,
-  droppedFile,
-  onFileAction,
   systemNotification,
   onSelectWidget,
 }) => {
@@ -407,7 +364,9 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const hasMedia = Boolean(track.title && track.title !== "Tidak ada media");
   const timerOn = clockTimer.active;
 
-  const file = activeWidget === "file-drop" ? droppedFile : null;
+  // File diseret / dilepas ke island (logika & tampilan ada di ./file)
+  const fileIsland = useFileIsland();
+  const file = fileIsland.active ? fileIsland : null;
   const system = activeWidget === "system" ? systemNotification : null;
 
   const timerFocused =
@@ -430,6 +389,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const { width: expandedWidth, height: expandedHeight } = getExpandedSize(
     kind,
     lyricsMode,
+    getFilePanelSize(fileIsland.actions.length),
   );
 
   const anim = {
@@ -613,6 +573,33 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   useEffect(() => {
     if (kind === "idle") setExpanded(false);
   }, [kind]);
+
+  // ---- File diseret ke island ----
+
+  const fileWasActive = useRef(false);
+  const wasExpanded = useRef(false);
+
+  // File mulai diseret / dilepas -> island mengembang. Selesai / batal -> menutup.
+  useEffect(() => {
+    if (fileIsland.active) setExpanded(true);
+    else if (fileWasActive.current) setExpanded(false);
+
+    fileWasActive.current = fileIsland.active;
+  }, [fileIsland.active]);
+
+  // Island ditutup (klik di luar / kehilangan fokus) saat menu file terbuka -> buang file
+  useEffect(() => {
+    if (
+      wasExpanded.current &&
+      !expanded &&
+      fileIsland.active &&
+      !fileIsland.hovering
+    ) {
+      fileIsland.clear();
+    }
+
+    wasExpanded.current = expanded;
+  }, [expanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Area klik ke Rust ----
 
@@ -810,7 +797,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   // ---- Layer file ----
 
-  const renderFileLayer = (f: DroppedFile): React.ReactNode => {
+  const renderFileLayer = (): React.ReactNode => {
     if (expanded) {
       return (
         <MorphLayer
@@ -819,7 +806,17 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           width={expandedWidth}
           height={expandedHeight}
         >
-          <FileCard file={f} onAction={onFileAction} />
+          <FileActionsPanel
+            items={fileIsland.items}
+            actions={fileIsland.actions}
+            hovering={fileIsland.hovering}
+            hoverId={fileIsland.hoverId}
+            armedId={fileIsland.armedId}
+            status={fileIsland.status}
+            message={fileIsland.message}
+            onRun={fileIsland.run}
+            onClose={fileIsland.clear}
+          />
         </MorphLayer>
       );
     }
@@ -838,7 +835,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             <File size={14} />
           </div>
           <div className="min-w-0 flex-1 truncate text-[11px] font-semibold">
-            {f.name}
+            {fileIsland.items[0]?.name ?? "File"}
           </div>
         </div>
       </MorphLayer>
@@ -895,7 +892,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
       return (
         <motion.div key="file" className="relative h-full w-full" {...swapFade}>
           <AnimatePresence initial={false}>
-            {renderFileLayer(file)}
+            {renderFileLayer()}
           </AnimatePresence>
         </motion.div>
       );
