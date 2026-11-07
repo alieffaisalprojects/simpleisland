@@ -1,6 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-import type { Transition } from "framer-motion";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AnimatePresence,
+  animate,
+  motion,
+  useMotionValue,
+} from "framer-motion";
+import type { MotionValue, Transition } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { File, Music } from "lucide-react";
@@ -11,7 +16,12 @@ import {
   LyricsState,
   SpotifyTrack,
 } from "../../types";
-import { MorphLayer, SPOTIFY_SIZES, SpotifyWidget } from "./SpotifyWidget";
+import {
+  MorphLayer,
+  SPOTIFY_SIZES,
+  SpotifyWidget,
+  VOLUME_BTN_Y,
+} from "./SpotifyWidget";
 import { TimerCompact, TimerExpanded, TimerPill } from "./ClockTimerView";
 import { SystemWidget } from "../modules/SystemWidget";
 
@@ -100,6 +110,128 @@ const SEC_CONTENT_ENTER: Transition = {
   scale: SEC_ENTER,
   opacity: { delay: 0.16, duration: 0.2 },
 };
+
+// ---- HUD volume (pil vertikal di kanan island) ----
+
+// Satu langkah volume (16 langkah, sama seperti iOS)
+const VOLUME_STEP = 1 / 16;
+
+// HUD hilang setelah sekian ms tanpa tekanan
+const VOLUME_HIDE_MS = 1500;
+
+// Ukuran pil hitam HUD dan jarak pil putih ke tepinya
+const HUD_W = 30;
+const HUD_H = 116;
+const HUD_PAD = 7;
+
+// Gundukan kecil di tepi island, berpusat di tombol yang ditekan.
+// Sengaja pendek supaya tidak menyentuh pil volume.
+const BUMP_H = 38;
+const BUMP_OUT = 6; // menonjol keluar dari tepi island (px)
+const BUMP_IN = 10; // bagian yang tersembunyi di dalam island (px)
+
+// Pil volume terdorong sejauh ini ke kanan saat tombol ditekan
+const HUD_PUSH = 10;
+
+// HUD keluar: lembut, sedikit membal
+const HUD_ENTER = {
+  type: "spring",
+  stiffness: 210,
+  damping: 18,
+  mass: 0.85,
+} as const;
+
+// HUD masuk kembali ke island: cepat, tanpa membal
+const HUD_EXIT = {
+  type: "spring",
+  stiffness: 340,
+  damping: 32,
+  mass: 0.8,
+} as const;
+
+// Pil putih mengikuti level volume
+const HUD_FILL_SPRING = {
+  type: "spring",
+  stiffness: 520,
+  damping: 38,
+  mass: 0.6,
+} as const;
+
+// Bentuk tetesan air saat HUD keluar (menetes ke kanan)
+const HUD_STRETCH_X = [0.5, 1.28, 1];
+const HUD_SQUASH_Y = [0.55, 0.94, 1];
+
+const HUD_SHAPE_ENTER: Transition = {
+  x: HUD_ENTER,
+  scaleX: { duration: 0.55, times: [0, 0.45, 1], ease: "easeOut" },
+  scaleY: { duration: 0.55, times: [0, 0.45, 1], ease: "easeOut" },
+};
+
+const HUD_CONTENT_ENTER: Transition = {
+  x: HUD_ENTER,
+  scale: HUD_ENTER,
+  opacity: { delay: 0.14, duration: 0.2 },
+};
+
+const HUD_CONTENT_EXIT: Transition = {
+  x: HUD_EXIT,
+  scale: HUD_EXIT,
+  opacity: { duration: 0.12 },
+};
+
+// Denyut pil volume: melebar cepat, lalu membal kembali
+const PULSE_UP = { duration: 0.09, ease: "easeOut" } as const;
+
+const PULSE_BACK = {
+  type: "spring",
+  stiffness: 480,
+  damping: 15,
+  mass: 0.7,
+} as const;
+
+// Pil kembali dari posisi terdorong: membal sedikit
+const SHIFT_BACK = {
+  type: "spring",
+  stiffness: 320,
+  damping: 15,
+  mass: 0.8,
+} as const;
+
+// Gundukan surut lagi setelah pil terdorong
+const BUMP_BACK = {
+  type: "spring",
+  stiffness: 230,
+  damping: 24,
+  mass: 0.8,
+} as const;
+
+interface HudMotion {
+  pulseX: MotionValue<number>;
+  pulseY: MotionValue<number>;
+  shift: MotionValue<number>;
+  grow: MotionValue<number>;
+}
+
+// Satu tekanan: pil terdorong ke kanan dan melebar, gundukan kecil muncul di
+// tepi island (tidak menyentuh pil), lalu semuanya kembali
+function hudPush({ pulseX, pulseY, shift, grow }: HudMotion) {
+  animate(shift, HUD_PUSH, {
+    ...PULSE_UP,
+    onComplete: () => animate(shift, 0, SHIFT_BACK),
+  });
+  animate(grow, 1, {
+    ...PULSE_UP,
+    onComplete: () => animate(grow, 0, BUMP_BACK),
+  });
+  animate(pulseX, 1.1, {
+    ...PULSE_UP,
+    onComplete: () => animate(pulseX, 1, PULSE_BACK),
+  });
+  animate(pulseY, 1.03, {
+    ...PULSE_UP,
+    onComplete: () => animate(pulseY, 1, PULSE_BACK),
+  });
+}
 
 // Animasi ganti konten
 const swapFade = {
@@ -245,6 +377,22 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const [revealing, setRevealing] = useState(false);
   const [locked, setLocked] = useState(false); // kunci island saat lirik expanded
 
+  // Volume
+  const [volume, setVolume] = useState(0.5); // 0..1
+  const [volumeActive, setVolumeActive] = useState(false); // HUD diminta tampil
+  const [volTail, setVolTail] = useState(false); // HUD masih bergerak keluar
+  const volumeRef = useRef(0.5);
+  const volumeBusy = useRef(0); // jumlah perintah volume yang belum selesai
+  const volumeHideTimer = useRef<number | undefined>(undefined);
+
+  // Denyut pil volume + gundukan hitam di sisi tombol yang ditekan
+  const hudPulseX = useMotionValue(1);
+  const hudPulseY = useMotionValue(1);
+  const hudShift = useMotionValue(0); // pil terdorong ke kanan (px)
+  const bumpGrow = useMotionValue(0); // tinggi gundukan 0..1
+
+  const [bumpAt, setBumpAt] = useState<"plus" | "minus">("plus");
+
   // Pilihan aktivitas utama (disimpan lokal supaya klik pil bulat selalu berlaku)
   const [pick, setPick] = useState<Pick>(
     activeWidget === "timer" ? "timer" : "music",
@@ -313,6 +461,103 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     setPick(secondary);
     onSelectWidget(secondary === "timer" ? "timer" : "spotify");
   };
+
+  // ---- Volume ----
+
+  // HUD hanya untuk tampilan player musik yang terbuka
+  const musicExpanded =
+    expanded && kind === "music" && !lyricsMode && !forceMini;
+  const showVolume = volumeActive && musicExpanded;
+  const volumeWindow = showVolume || volTail;
+
+  const applyVolume = useCallback((value: number) => {
+    volumeRef.current = value;
+    setVolume(value);
+  }, []);
+
+  // Baca volume sistem setiap player dibuka
+  useEffect(() => {
+    if (!musicExpanded) return;
+
+    let cancelled = false;
+
+    invoke<number>("volume_get")
+      .then((value) => {
+        if (!cancelled && volumeBusy.current === 0) applyVolume(value);
+      })
+      .catch((e) => console.error("Gagal membaca volume:", e));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [musicExpanded, applyVolume]);
+
+  // Player ditutup -> HUD ikut hilang (tidak muncul lagi saat dibuka ulang)
+  useEffect(() => {
+    if (musicExpanded) return;
+    window.clearTimeout(volumeHideTimer.current);
+    setVolumeActive(false);
+  }, [musicExpanded]);
+
+  // Window dibiarkan besar sampai animasi HUD selesai
+  useEffect(() => {
+    if (showVolume) {
+      setVolTail(true);
+      return;
+    }
+
+    const t = window.setTimeout(() => setVolTail(false), 800);
+    return () => window.clearTimeout(t);
+  }, [showVolume]);
+
+  useEffect(() => () => window.clearTimeout(volumeHideTimer.current), []);
+
+  // Tombol -/+ ditekan
+  const handleVolumeStep = useCallback(
+    (direction: 1 | -1) => {
+      const delta = direction * VOLUME_STEP;
+
+      // Tampilan langsung berubah, nilai sebenarnya menyusul dari Rust
+      applyVolume(Math.min(1, Math.max(0, volumeRef.current + delta)));
+      setVolumeActive(true);
+
+      // Gundukan tumbuh di sisi tombol yang ditekan dan menyambung ke pil,
+      // pil terdorong ke kanan. Island sendiri tidak ikut bergerak.
+      setBumpAt(direction > 0 ? "plus" : "minus");
+      hudPush({
+        pulseX: hudPulseX,
+        pulseY: hudPulseY,
+        shift: hudShift,
+        grow: bumpGrow,
+      });
+
+      window.clearTimeout(volumeHideTimer.current);
+      volumeHideTimer.current = window.setTimeout(
+        () => setVolumeActive(false),
+        VOLUME_HIDE_MS,
+      );
+
+      volumeBusy.current += 1;
+
+      invoke<number>("volume_step", { delta })
+        .then((value) => {
+          // Hanya percaya hasil Rust jika tidak ada tekanan lain yang menyusul
+          if (volumeBusy.current === 1) applyVolume(value);
+        })
+        .catch((e) => console.error("Gagal mengubah volume:", e))
+        .finally(() => {
+          volumeBusy.current -= 1;
+        });
+    },
+    [applyVolume, hudPulseX, hudPulseY, hudShift, bumpGrow],
+  );
+
+  // Panel volume ditutup lewat ikon -> HUD ikut hilang
+  const handleVolumePanelChange = useCallback((open: boolean) => {
+    if (open) return;
+    window.clearTimeout(volumeHideTimer.current);
+    setVolumeActive(false);
+  }, []);
 
   // ---- Window Tauri ----
 
@@ -468,7 +713,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     return () => window.clearTimeout(t);
   }, [showSecondary]);
 
-  const gooOn = showSecondary || gooTail;
+  const gooOn = showSecondary || gooTail || volumeWindow;
 
   // ---- Pil kedua ----
 
@@ -498,6 +743,35 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     height: COMPACT_HEIGHT,
     borderRadius: COMPACT_HEIGHT / 2,
     transformOrigin: "left center",
+  };
+
+  // ---- HUD volume ----
+
+  // Pil vertikal di kanan island, di tengah tinggi island.
+  // Posisi akhir: di luar tepi kanan. Posisi awal: terselip di dalam island
+  const hudRestX = expandedWidth / 2 + SPLIT_GAP;
+  const hudHiddenX = expandedWidth / 2 - HUD_W * 0.6;
+  const hudTop = ISLAND_TOP + (expandedHeight - HUD_H) / 2;
+
+  const hudStyle: React.CSSProperties = {
+    top: hudTop,
+    left: "50%",
+    width: HUD_W,
+    height: HUD_H,
+    transformOrigin: "left center",
+  };
+
+  // Gundukan kecil: tumbuh dari tepi kanan island, setinggi tombol
+  const bumpCenterY =
+    bumpAt === "plus" ? VOLUME_BTN_Y.plus : VOLUME_BTN_Y.minus;
+
+  const bumpStyle: React.CSSProperties = {
+    top: ISLAND_TOP + bumpCenterY - BUMP_H / 2,
+    left: `calc(50% + ${expandedWidth / 2 - BUMP_IN}px)`,
+    width: BUMP_IN + BUMP_OUT,
+    height: BUMP_H,
+    borderRadius: BUMP_H / 2,
+    transformOrigin: `${BUMP_IN}px 50%`,
   };
 
   // ---- Layer timer ----
@@ -594,6 +868,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             onLyricsModeChange={setLyricsMode}
             locked={locked}
             onLockedChange={setLocked}
+            onVolumeStep={handleVolumeStep}
+            onVolumePanelChange={handleVolumePanelChange}
           />
         </motion.div>
       );
@@ -701,6 +977,48 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           transition={spring}
         />
 
+        {/* Gundukan hitam di tepi island (menyatu lewat efek gooey) */}
+        {volumeWindow && (
+          <motion.div
+            className="absolute bg-[#050506]"
+            style={{ ...bumpStyle, scale: bumpGrow }}
+          />
+        )}
+
+        {/* Bentuk HUD volume (tetesan air keluar dari sisi kanan island) */}
+        <AnimatePresence>
+          {showVolume && (
+            <motion.div
+              key="volume-shape"
+              className="absolute"
+              style={hudStyle}
+              initial={{ x: hudHiddenX, scaleX: 0.5, scaleY: 0.55 }}
+              animate={{
+                x: hudRestX,
+                scaleX: HUD_STRETCH_X,
+                scaleY: HUD_SQUASH_Y,
+                transition: HUD_SHAPE_ENTER,
+              }}
+              exit={{
+                x: hudHiddenX,
+                scaleX: 0.5,
+                scaleY: 0.55,
+                transition: HUD_EXIT,
+              }}
+            >
+              <motion.div
+                className="h-full w-full bg-[#050506]"
+                style={{
+                  borderRadius: HUD_W / 2,
+                  x: hudShift,
+                  scaleX: hudPulseX,
+                  scaleY: hudPulseY,
+                }}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Bentuk pil kedua (tetesan air) */}
         <AnimatePresence>
           {showSecondary && (
@@ -752,6 +1070,49 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           {renderMainContent()}
         </AnimatePresence>
       </motion.div>
+
+      {/* Isi HUD volume: pil putih di dalam pil hitam */}
+      <AnimatePresence>
+        {showVolume && (
+          <motion.div
+            key="volume-content"
+            className="pointer-events-none absolute z-40"
+            style={hudStyle}
+            initial={{ x: hudHiddenX, scale: 0.6, opacity: 0 }}
+            animate={{
+              x: hudRestX,
+              scale: 1,
+              opacity: 1,
+              transition: HUD_CONTENT_ENTER,
+            }}
+            exit={{
+              x: hudHiddenX,
+              scale: 0.6,
+              opacity: 0,
+              transition: HUD_CONTENT_EXIT,
+            }}
+          >
+            <motion.div
+              className="h-full w-full"
+              style={{
+                padding: HUD_PAD,
+                x: hudShift,
+                scaleX: hudPulseX,
+                scaleY: hudPulseY,
+              }}
+            >
+              <div className="relative h-full w-full overflow-hidden rounded-full bg-white/[0.2]">
+                <motion.div
+                  className="h-full w-full rounded-full bg-white"
+                  initial={false}
+                  animate={{ y: `${(1 - volume) * 100}%` }}
+                  transition={HUD_FILL_SPRING}
+                />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Konten pil kedua (bulat) */}
       <AnimatePresence>

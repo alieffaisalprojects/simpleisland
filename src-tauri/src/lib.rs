@@ -1,4 +1,3 @@
-
 mod island_native; // Timer Clock Windows dan HTTP request
 
 use base64::{engine::general_purpose, Engine as _};
@@ -582,6 +581,112 @@ async fn start_media_listener(app: AppHandle) {
 }
 
 // ---------------------------------------------------------------------------
+// Volume sistem (Windows Core Audio)
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+mod volume {
+    use std::sync::Mutex;
+    use windows::Win32::Foundation::BOOL;
+    use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    // Cegah dua perintah volume berjalan bersamaan (tekan cepat / tahan tombol).
+    static STEP_LOCK: Mutex<()> = Mutex::new(());
+
+    // Ambil kontrol volume perangkat output default.
+    fn endpoint() -> Result<IAudioEndpointVolume, String> {
+        unsafe {
+            // Hasilnya diabaikan: thread ini mungkin sudah memakai COM.
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                    .map_err(|e| e.to_string())?;
+
+            let device = enumerator
+                .GetDefaultAudioEndpoint(eRender, eConsole)
+                .map_err(|e| e.to_string())?;
+
+            device
+                .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    // Volume master saat ini (0.0 - 1.0).
+    pub fn get() -> Result<f32, String> {
+        let ep = endpoint()?;
+
+        unsafe {
+            ep.GetMasterVolumeLevelScalar()
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    // Geser volume sebesar `delta`, lalu kembalikan nilai akhirnya.
+    pub fn step(delta: f32) -> Result<f32, String> {
+        let _guard = STEP_LOCK.lock().map_err(|e| e.to_string())?;
+        let ep = endpoint()?;
+
+        unsafe {
+            let current = ep
+                .GetMasterVolumeLevelScalar()
+                .map_err(|e| e.to_string())?;
+
+            let target = (current + delta).clamp(0.0, 1.0);
+
+            ep.SetMasterVolumeLevelScalar(target, std::ptr::null())
+                .map_err(|e| e.to_string())?;
+
+            // Naikkan volume = otomatis unmute, seperti tombol volume biasa.
+            if target > 0.0 {
+                let _ = ep.SetMute(BOOL(0), std::ptr::null());
+            }
+
+            ep.GetMasterVolumeLevelScalar()
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
+// Baca volume sistem (0.0 - 1.0).
+#[tauri::command]
+async fn volume_get() -> Result<f32, String> {
+    #[cfg(windows)]
+    {
+        return tauri::async_runtime::spawn_blocking(volume::get)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(not(windows))]
+    Err("Hanya tersedia di Windows".to_string())
+}
+
+// Geser volume sistem, kembalikan volume akhir (0.0 - 1.0).
+#[tauri::command]
+async fn volume_step(delta: f32) -> Result<f32, String> {
+    #[cfg(windows)]
+    {
+        return tauri::async_runtime::spawn_blocking(move || volume::step(delta))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = delta;
+        Err("Hanya tersedia di Windows".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Hit test
 // ---------------------------------------------------------------------------
 
@@ -936,6 +1041,8 @@ pub fn run() {
             media_next,
             media_previous,
             media_seek,
+            volume_get,
+            volume_step,
             island_set_height,
             island_set_hit_rects,
             island_show_menu,
