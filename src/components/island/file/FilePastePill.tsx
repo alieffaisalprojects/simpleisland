@@ -1,7 +1,9 @@
 /**
  * FilePastePill.tsx
  * Isi pil island untuk file yang sudah disalin / dipotong: menggantung di island
- * sampai tombol Paste ditekan (lalu pilih folder tujuan) atau ditutup dengan X.
+ * sampai ditempel atau ditutup dengan X. Ada dua tombol tempel:
+ *   - Paste        : ke folder Explorer yang sedang dibuka
+ *   - ikon folder  : pilih sendiri folder tujuan lewat dialog
  *
  * Seperti Windows saat menyeret file, ada tulisan "+ Copy" (atau "Move" untuk Potong),
  * dan saat menempel jadi "+ Copy to <folder>".
@@ -11,12 +13,12 @@
 
 import React from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ClipboardPaste, Loader2, X } from "lucide-react";
+import { Check, ClipboardPaste, FolderOpen, Loader2, X } from "lucide-react";
 import { describeItems, KIND_ICON } from "./catalog";
 import type { PendingPaste } from "./useFileIsland";
 
 // Lebar pil saat compact (dipakai DynamicIsland)
-export const PASTE_PILL_WIDTH = 296;
+export const PASTE_PILL_WIDTH = 334;
 
 // Nama folder terakhir dari path, mis. "C:\\Users\\Aku\\Documents" -> "Documents"
 function folderName(path?: string): string {
@@ -28,13 +30,15 @@ function folderName(path?: string): string {
 
 interface FilePastePillProps {
   paste: PendingPaste;
-  onPaste: () => void;
+  onPaste: () => void; // tempel di folder yang sedang dibuka
+  onBrowse: () => void; // pilih folder tujuan
   onDismiss: () => void;
 }
 
 export const FilePastePill: React.FC<FilePastePillProps> = ({
   paste,
   onPaste,
+  onBrowse,
   onDismiss,
 }) => {
   const { items, mode, phase, dest, message } = paste;
@@ -49,7 +53,8 @@ export const FilePastePill: React.FC<FilePastePillProps> = ({
   // Baris kedua: tulisan Copy + keterangan sesuai keadaan
   let detail: string;
   if (phase === "picking") detail = "Pilih folder…";
-  else if (phase === "running") detail = target ? `to ${target}` : "";
+  else if (phase === "running")
+    detail = target ? `to ${target}` : "Mencari folder…";
   else if (phase === "done") detail = message ?? "Selesai";
   else if (phase === "error") detail = message ?? "Gagal menempel";
   else detail = subtitle;
@@ -78,7 +83,11 @@ export const FilePastePill: React.FC<FilePastePillProps> = ({
             className="mt-[4px] flex items-center gap-[5px] leading-none"
           >
             {phase === "done" ? (
-              <Check size={11} strokeWidth={3} className="shrink-0 text-emerald-300" />
+              <Check
+                size={11}
+                strokeWidth={3}
+                className="shrink-0 text-emerald-300"
+              />
             ) : (
               <span className="shrink-0 rounded-[5px] bg-sky-400/20 px-[5px] py-[2px] text-[9px] font-semibold text-sky-200">
                 {label}
@@ -96,13 +105,19 @@ export const FilePastePill: React.FC<FilePastePillProps> = ({
         </AnimatePresence>
       </div>
 
-      {busy && <Loader2 size={17} className="mr-1 shrink-0 animate-spin text-white/80" />}
+      {busy && (
+        <Loader2
+          size={17}
+          className="mr-1 shrink-0 animate-spin text-white/80"
+        />
+      )}
 
       {canAct && (
         <>
           <motion.button
             type="button"
             aria-label="Paste"
+            title="Tempel di folder yang sedang dibuka"
             onClick={(e) => {
               e.stopPropagation();
               onPaste();
@@ -115,6 +130,20 @@ export const FilePastePill: React.FC<FilePastePillProps> = ({
             <ClipboardPaste size={13} strokeWidth={2.4} />
             Paste
           </motion.button>
+
+          <button
+            type="button"
+            aria-label="Pilih folder"
+            title="Pilih folder tujuan"
+            onClick={(e) => {
+              e.stopPropagation();
+              onBrowse();
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+            className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-white/10 text-white/80 transition hover:bg-white/20 hover:text-white active:scale-90 focus:outline-none"
+          >
+            <FolderOpen size={14} />
+          </button>
 
           <button
             type="button"
@@ -132,7 +161,11 @@ export const FilePastePill: React.FC<FilePastePillProps> = ({
       )}
 
       {phase === "done" && (
-        <Check size={17} strokeWidth={2.6} className="mr-1 shrink-0 text-emerald-300" />
+        <Check
+          size={17}
+          strokeWidth={2.6}
+          className="mr-1 shrink-0 text-emerald-300"
+        />
       )}
     </div>
   );

@@ -1,5 +1,6 @@
 mod island_native; // Timer Clock Windows dan HTTP request
 mod file_actions; // Aksi file untuk drag & drop ke island
+mod file_convert; // Konversi ICO / PDF / Word + folder Explorer aktif
 
 use base64::{engine::general_purpose, Engine as _};
 use std::sync::Mutex;
@@ -1127,7 +1128,9 @@ pub fn run() {
             file_actions::file_pick_folder,
             file_actions::file_paste,
             file_actions::file_rename,
-            file_actions::file_properties
+            file_actions::file_properties,
+            file_convert::file_convert,
+            file_convert::file_explorer_folder
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

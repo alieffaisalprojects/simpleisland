@@ -920,6 +920,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           <FilePastePill
             paste={fileIsland.paste}
             onPaste={fileIsland.pasteRun}
+            onBrowse={fileIsland.pasteBrowse}
             onDismiss={fileIsland.pasteDismiss}
           />
         </motion.div>

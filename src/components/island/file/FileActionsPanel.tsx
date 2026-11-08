@@ -400,7 +400,14 @@ export const FileActionsPanel: React.FC<FileActionsPanelProps> = ({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.16 }}
-              className="mt-[3px] truncate text-[11.5px] leading-tight text-white/50"
+              title={hint}
+              className="mt-[3px] text-[11.5px] leading-tight text-white/50"
+              style={{
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
             >
               {hint}
             </motion.div>

@@ -8,8 +8,9 @@
  *   leave -> dibatalkan, island menutup
  *
  * Salin / Potong tidak langsung menutup island: island mengecil jadi pil dengan tombol
- * Paste yang menggantung sampai ditekan. Paste membuka dialog pilih folder, lalu
- * file ditempel ke folder itu (lihat `paste` dan `pasteRun`).
+ * Paste yang menggantung sampai ditekan. Ada dua cara menempel (lihat `paste`, `pasteRun`, `pasteBrowse`):
+ *   - Paste        -> ke folder Explorer yang sedang dibuka
+ *   - ikon folder  -> dialog pilih folder tujuan
  *
  * Rename dan Properti membuka tampilan sendiri di dalam panel (`view`):
  *   "menu"   -> kotak-kotak aksi
@@ -29,6 +30,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   buildActions,
   classify,
+  CONVERT_ACTIONS,
   type FileAction,
   type FileItem,
   type FileTools,
@@ -280,10 +282,14 @@ export function useFileIsland() {
       setStatus({ [actionId]: "running" });
 
       try {
-        const res = await invoke<ActionResult>("file_action", {
-          action: actionId,
-          paths: list.map((i) => i.path),
-        });
+        // Konversi baru (ICO, PDF -> PNG/JPG/Word, Word -> PDF) ada di file_convert.rs
+        const res = await invoke<ActionResult>(
+          CONVERT_ACTIONS.has(actionId) ? "file_convert" : "file_action",
+          {
+            action: actionId,
+            paths: list.map((i) => i.path),
+          },
+        );
 
         setStatus({ [actionId]: "done" });
         setMessage(res.message);
@@ -299,6 +305,7 @@ export function useFileIsland() {
         if (!QUIET_ACTIONS.has(actionId)) playSound("checklist");
         closeTimer.current = window.setTimeout(clear, CLOSE_AFTER_DONE_MS);
       } catch (e) {
+        console.error(`Aksi "${actionId}" gagal:`, e);
         setStatus({ [actionId]: "error" });
         setMessage(errorText(e, "Aksi gagal"));
       }
@@ -354,8 +361,9 @@ export function useFileIsland() {
     [clear],
   );
 
-  // Tombol Paste: pilih folder, lalu tempel file ke sana
-  const pasteRun = useCallback(async () => {
+  // Tempel file. "here" = folder Explorer yang sedang dibuka,
+  // "browse" = pilih folder lewat dialog.
+  const startPaste = useCallback(async (where: "here" | "browse") => {
     const cur = pasteRef.current;
     if (!cur) return;
     if (cur.phase !== "ready" && cur.phase !== "error") return;
@@ -370,29 +378,51 @@ export function useFileIsland() {
     const stale = () => pasteRef.current?.items !== cur.items;
 
     try {
-      setPaste({ ...cur, phase: "picking", message: undefined });
-
       let dest: string | null;
 
       try {
-        dest = await invoke<string | null>("file_pick_folder", {
-          start: paths[0],
-        });
+        if (where === "browse") {
+          setPaste({ ...cur, phase: "picking", message: undefined });
+          dest = await invoke<string | null>("file_pick_folder", {
+            start: paths[0],
+          });
+        } else {
+          setPaste({
+            ...cur,
+            phase: "running",
+            dest: undefined,
+            message: undefined,
+          });
+          dest = await invoke<string | null>("file_explorer_folder");
+        }
       } catch (e) {
         if (stale()) return;
         setPaste({
           ...cur,
           phase: "error",
-          message: errorText(e, "Gagal membuka dialog"),
+          message: errorText(
+            e,
+            where === "browse"
+              ? "Gagal membuka dialog"
+              : "Gagal membaca folder Explorer",
+          ),
         });
         return;
       }
 
       if (stale()) return;
 
-      // Dialog dibatalkan: pil tetap menggantung
       if (!dest) {
-        setPaste({ ...cur, phase: "ready" });
+        if (where === "browse") {
+          // Dialog dibatalkan: pil tetap menggantung
+          setPaste({ ...cur, phase: "ready" });
+        } else {
+          setPaste({
+            ...cur,
+            phase: "error",
+            message: "Tidak ada folder Explorer yang terbuka",
+          });
+        }
         return;
       }
 
@@ -426,6 +456,12 @@ export function useFileIsland() {
       pasteBusy.current = false;
     }
   }, []);
+
+  // Tombol Paste: tempel ke folder Explorer yang sedang dibuka
+  const pasteRun = useCallback(() => startPaste("here"), [startPaste]);
+
+  // Tombol ikon folder: pilih folder tujuan lewat dialog
+  const pasteBrowse = useCallback(() => startPaste("browse"), [startPaste]);
 
   // Tutup pil Paste tanpa menempel
   const pasteDismiss = useCallback(() => {
@@ -569,6 +605,7 @@ export function useFileIsland() {
     back: backToMenu,
     renameRun,
     pasteRun,
+    pasteBrowse,
     pasteDismiss,
   };
 }

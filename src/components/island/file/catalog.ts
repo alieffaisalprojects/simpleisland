@@ -5,7 +5,8 @@
  *
  * Menambah aksi baru:
  *  1. tambahkan di buildActions() di bawah (id + label + ikon),
- *  2. tangani id yang sama di `run_action` pada file_actions.rs.
+ *  2. tangani id yang sama di `run_action` pada file_actions.rs
+ *     (khusus id di CONVERT_ACTIONS: tangani di file_convert.rs).
  *
  * Catatan: aksi "rename" dan "props" tidak lewat `run_action`; keduanya membuka
  * tampilan sendiri di panel (lihat useFileIsland.ts).
@@ -205,6 +206,18 @@ const act = (
   tone: FileAction["tone"] = "neutral",
 ): FileAction => ({ id, label, Icon, tone });
 
+// Aksi konversi yang dijalankan oleh file_convert.rs (bukan file_actions.rs)
+export const CONVERT_ACTIONS = new Set([
+  "img_ico",
+  "pdf_png",
+  "pdf_jpg",
+  "pdf_docx",
+  "doc_pdf",
+]);
+
+// File Word yang bisa diubah ke PDF
+const WORD_EXT = new Set(["doc", "docx", "rtf", "odt"]);
+
 // jpeg dianggap sama dengan jpg
 const norm = (ext: string) => (ext === "jpeg" ? "jpg" : ext);
 
@@ -212,7 +225,7 @@ const IMAGE_TARGETS: [string, string][] = [
   ["png", "PNG"],
   ["jpg", "JPG"],
   ["webp", "WebP"],
-  ["bmp", "BMP"],
+  ["ico", "ICO"],
 ];
 
 // Susun kotak aksi sesuai isi yang diseret (satu atau banyak item)
@@ -252,6 +265,9 @@ export function buildActions(
       break;
 
     case "pdf":
+      out.push(act("pdf_png", "PNG", ImageIcon, "accent"));
+      out.push(act("pdf_jpg", "JPG", ImageIcon, "accent"));
+      out.push(act("pdf_docx", "Word", FileText, "accent"));
       out.push(act("pdf_shrink", "Compress", Minimize2, "accent"));
       out.push(act("zip", "ZIP", Archive, "accent"));
       break;
@@ -282,8 +298,15 @@ export function buildActions(
       out.push(act("zip", "ZIP", Archive, "accent"));
       break;
 
+    case "doc":
+      if (items.every((i) => WORD_EXT.has(i.ext))) {
+        out.push(act("doc_pdf", "PDF", FileText, "accent"));
+      }
+      out.push(act("zip", "ZIP", Archive, "accent"));
+      break;
+
     default:
-      // dokumen, kode, campuran, tak dikenal
+      // kode, campuran, tak dikenal
       out.push(act("zip", "ZIP", Archive, "accent"));
       break;
   }
