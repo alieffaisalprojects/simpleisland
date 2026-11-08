@@ -11,7 +11,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
 };
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -147,7 +147,8 @@ fn recenter_island(app: &AppHandle) {
 
 // Buat menu tray dan menu klik kanan.
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
+    // Ikuti pengaturan (bukan registry): di mode dev registry sengaja tidak disentuh
+    let autostart_on = settings::current(app).autostart;
     let island_on = settings::is_enabled();
 
     let settings_item = MenuItem::with_id(
@@ -208,7 +209,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         MENU_SETTINGS => settings::open_settings(app),
 
         MENU_AUTOSTART => {
-            let now = app.autolaunch().is_enabled().unwrap_or(false);
+            let now = settings::current(app).autostart;
             settings::set_autostart(app, !now);
         }
 

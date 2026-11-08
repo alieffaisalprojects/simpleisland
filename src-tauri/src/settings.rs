@@ -129,11 +129,48 @@ fn apply_window(app: &AppHandle, enabled: bool) {
     }
 }
 
-fn sync_autostart(app: &AppHandle, want: bool) {
+// Daftarkan entri auto startup yang menunjuk ke exe yang SEDANG berjalan.
+//
+// `is_enabled()` hanya mengecek apakah entri ada, bukan ke exe mana entri itu
+// menunjuk. Karena itu `enable()` selalu dipanggil ulang (menimpa path lama), bukan
+// dilewati ketika sudah "aktif".
+//
+// Saat mode dev (`pnpm tauri dev`) entri TIDAK ditulis: exe debug membuka console dan
+// memuat localhost:1420, padahal server dev tidak jalan setelah boot Windows.
+fn register_autostart(app: &AppHandle) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "Mode dev: entri auto startup tidak ditulis (akan menunjuk ke exe debug). \
+             Jalankan hasil `pnpm tauri build` sekali untuk mendaftarkannya."
+        );
+        return Ok(());
+    }
+
+    app.autolaunch().enable().map_err(|e| e.to_string())
+}
+
+fn unregister_autostart(app: &AppHandle) -> Result<(), String> {
     let manager = app.autolaunch();
 
-    if manager.is_enabled().unwrap_or(false) != want {
-        let _ = if want { manager.enable() } else { manager.disable() };
+    if manager.is_enabled().unwrap_or(false) {
+        manager.disable().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+// Samakan entri auto startup di registry dengan pengaturan. Dipanggil setiap aplikasi
+// start, sehingga entri lama yang menunjuk ke path salah (mis. target\debug\...exe,
+// atau exe yang sudah dipindah/di-update) otomatis diperbaiki.
+fn sync_autostart(app: &AppHandle, want: bool) {
+    let result = if want {
+        register_autostart(app)
+    } else {
+        unregister_autostart(app)
+    };
+
+    if let Err(e) = result {
+        eprintln!("Gagal menyinkronkan auto startup: {e}");
     }
 }
 
@@ -155,9 +192,10 @@ pub fn init(app: &AppHandle) -> bool {
 
     if first_run {
         let _ = write_file(app, &settings);
-    } else {
-        sync_autostart(app, settings.autostart);
     }
+
+    // Selalu disinkronkan (juga saat pemakaian pertama) supaya path entri diperbarui
+    sync_autostart(app, settings.autostart);
 
     apply_window(app, settings.island_enabled);
     first_run
@@ -178,17 +216,13 @@ fn apply_change(app: &AppHandle, next: Settings) -> Result<Settings, String> {
         .clone();
 
     if next.autostart != prev.autostart {
-        let manager = app.autolaunch();
+        let result = if next.autostart {
+            register_autostart(app)
+        } else {
+            unregister_autostart(app)
+        };
 
-        if manager.is_enabled().unwrap_or(false) != next.autostart {
-            let result = if next.autostart {
-                manager.enable()
-            } else {
-                manager.disable()
-            };
-
-            result.map_err(|e| format!("Gagal mengubah auto startup: {e}"))?;
-        }
+        result.map_err(|e| format!("Gagal mengubah auto startup: {e}"))?;
     }
 
     write_file(app, &next)?;
