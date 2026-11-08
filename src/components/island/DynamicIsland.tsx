@@ -55,8 +55,13 @@ import {
   getCompactWidth,
   getExpandedSize,
   getPressScale,
+  MENU_SIZES,
+  type IslandKind,
+  type MenuView,
 } from "./dynamic_island/constants";
 import { useIslandVolume } from "./dynamic_island/useIslandVolume";
+import { IslandMenu } from "./menu/IslandMenu";
+import { useStopwatchRunning } from "./menu/stopwatchStore";
 
 interface DynamicIslandProps {
   activeWidget: ActiveWidget;
@@ -86,7 +91,11 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   systemNotification,
   onSelectWidget,
 }) => {
-  const [expanded, setExpanded] = useState(false);
+  const [expandedBase, setExpanded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false); // menu klik kanan
+  const [menuView, setMenuView] = useState<MenuView>("home");
+  const expanded = expandedBase || menuOpen;
+  const stopwatchRunning = useStopwatchRunning();
   const [lyricsMode, setLyricsMode] = useState(false);
   const [pausedIdle, setPausedIdle] = useState(false);
   const [pressed, setPressed] = useState(false);
@@ -104,6 +113,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   const islandRef = useRef<HTMLDivElement>(null);
   const lockedRef = useRef(false); // dibaca listener
+  const menuBusyRef = useRef(false); // menu menunggu izin lokasi
   const secHit = useRef<number[] | null>(null); // area klik pil kedua
 
   const hasMedia = Boolean(track.title && track.title !== "Tidak ada media");
@@ -123,13 +133,14 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     !file && !system && timerOn && (pick === "timer" || !hasMedia);
   const isMusic = !file && !system && hasMedia && !timerFocused;
 
-  const kind = getKind(
+  const baseKind = getKind(
     Boolean(file),
     Boolean(fileIsland.paste),
     Boolean(system),
     timerFocused,
     isMusic,
   );
+  const kind: IslandKind = menuOpen ? "menu" : baseKind;
   const secondary = getSecondary(kind, timerOn, hasMedia);
 
   const showSecondary = Boolean(secondary) && !expanded && !forceMini;
@@ -146,6 +157,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     kind,
     lyricsMode,
     getFilePanelSize(fileIsland.actions.length),
+    MENU_SIZES[menuView],
   );
 
   // ---- gaya island ----
@@ -184,7 +196,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const spring = expanded ? SPRING_EXPAND : SPRING_COLLAPSE;
 
   // kunci hanya saat lirik expanded
-  lockedRef.current = locked && expanded && lyricsMode && kind === "music";
+  // terkunci juga selama stopwatch berjalan: klik luar dan blur tidak menutup menu
+  lockedRef.current =
+    (locked && expanded && lyricsMode && kind === "music") ||
+    (menuOpen && stopwatchRunning);
 
   // lepas kunci
   useEffect(() => {
@@ -202,6 +217,23 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     if (!secondary) return;
     setPick(secondary);
     onSelectWidget(secondary === "timer" ? "timer" : "spotify");
+  };
+
+  // ---- menu klik kanan ----
+
+  // klik kanan pada island: buka menu, klik kanan lagi: tutup
+  const handleContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (lockedRef.current || forceMini) return;
+
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
+    setExpanded(false);
+    setMenuView("home");
+    setMenuOpen(true);
   };
 
   // ---- Volume ----
@@ -258,18 +290,24 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         !islandRef.current.contains(event.target as Node)
       ) {
         setExpanded(false);
+        setMenuOpen(false);
       }
     };
     const onWindowBlur = () => {
-      if (lockedRef.current) return;
+      if (lockedRef.current || menuBusyRef.current) return;
       setExpanded(false);
+      setMenuOpen(false);
     };
+    // matikan menu bawaan browser (Refresh, Save as, Print, Inspect, dll.)
+    const blockNativeMenu = (event: MouseEvent) => event.preventDefault();
+    document.addEventListener("contextmenu", blockNativeMenu);
 
     document.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("blur", onWindowBlur);
 
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("contextmenu", blockNativeMenu);
       window.removeEventListener("blur", onWindowBlur);
     };
   }, []);
@@ -369,6 +407,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   useEffect(() => {
     if (behind) {
       setExpanded(false);
+      setMenuOpen(false);
       setRevealing(true);
       return;
     }
@@ -566,6 +605,31 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // ---- konten utama ----
 
   const renderMainContent = (): React.ReactNode => {
+    // menu klik kanan
+    if (kind === "menu") {
+      return (
+        <motion.div key="menu" className="relative h-full w-full" {...swapFade}>
+          <AnimatePresence initial={false}>
+            <MorphLayer
+              key="menu-expanded"
+              variant="expanded"
+              width={expandedWidth}
+              height={expandedHeight}
+            >
+              <IslandMenu
+                view={menuView}
+                onViewChange={setMenuView}
+                onClose={() => setMenuOpen(false)}
+                onBusyChange={(busy) => {
+                  menuBusyRef.current = busy;
+                }}
+              />
+            </MorphLayer>
+          </AnimatePresence>
+        </motion.div>
+      );
+    }
+
     // musik
     if (kind === "music") {
       return (
@@ -786,10 +850,11 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         animate={anim}
         transition={spring}
         onClick={() => {
-          if (kind === "idle" || kind === "paste") return;
+          if (kind === "idle" || kind === "paste" || kind === "menu") return;
           if (lockedRef.current) return; // terkunci
           setExpanded((v) => !v);
         }}
+        onContextMenu={handleContextMenu}
         onPointerDown={() => setPressed(true)}
         onPointerUp={() => setPressed(false)}
         onPointerLeave={() => setPressed(false)}

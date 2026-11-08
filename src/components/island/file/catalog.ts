@@ -5,6 +5,7 @@
  *
  * Menambah aksi baru:
  *  1. tambahkan di buildActions() di bawah (id + label + ikon),
+ *     ikon SVG didaftarkan di SVG_ICONS (kalau kosong, pakai ikon lucide),
  *  2. tangani id yang sama di `run_action` pada file_actions.rs
  *     (khusus id di CONVERT_ACTIONS: tangani di file_convert.rs).
  *
@@ -32,6 +33,29 @@ import {
   Trash2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+
+//ikon svg menu
+import sevenZipIcon from "../../../assets/styles/menu_icons/7z.svg";
+import ekstrakIcon from "../../../assets/styles/menu_icons/ekstrak.svg";
+import hapusIcon from "../../../assets/styles/menu_icons/hapus.svg";
+import icoIcon from "../../../assets/styles/menu_icons/ico.svg";
+import jpgIcon from "../../../assets/styles/menu_icons/jpg.svg";
+import kompresIcon from "../../../assets/styles/menu_icons/kompres.svg";
+import mp3Icon from "../../../assets/styles/menu_icons/mp3.svg";
+import mp4Icon from "../../../assets/styles/menu_icons/mp4.svg";
+import pdfIcon from "../../../assets/styles/menu_icons/pdf.svg";
+import pindahIcon from "../../../assets/styles/menu_icons/pindah.svg";
+import pngIcon from "../../../assets/styles/menu_icons/png.svg";
+import propertiIcon from "../../../assets/styles/menu_icons/properti.svg";
+import rarIcon from "../../../assets/styles/menu_icons/rar.svg";
+import removebgIcon from "../../../assets/styles/menu_icons/removebg.svg";
+import renameIcon from "../../../assets/styles/menu_icons/rename.svg";
+import salinIcon from "../../../assets/styles/menu_icons/salin.svg";
+import terminalIcon from "../../../assets/styles/menu_icons/terminal.svg";
+import webpIcon from "../../../assets/styles/menu_icons/webp.svg";
+import wavIcon from "../../../assets/styles/menu_icons/wav.svg";
+import wordIcon from "../../../assets/styles/menu_icons/word.svg";
+import zipIcon from "../../../assets/styles/menu_icons/zip.svg";
 
 export type FileKind =
   | "folder"
@@ -64,7 +88,8 @@ export interface FileTools {
 export interface FileAction {
   id: string;
   label: string; // pendek, muat di kotak kecil
-  Icon: LucideIcon;
+  Icon: LucideIcon; // cadangan kalau svg kosong
+  svg?: string;
   tone: "accent" | "neutral" | "danger";
 }
 
@@ -196,12 +221,42 @@ export function describeItems(items: FileItem[]): {
   };
 }
 
+//id aksi -> ikon svg
+const SVG_ICONS: Record<string, string> = {
+  zip: zipIcon,
+  rar: rarIcon,
+  "7z": sevenZipIcon,
+  terminal: terminalIcon,
+  img_png: pngIcon,
+  img_jpg: jpgIcon,
+  img_webp: webpIcon,
+  img_ico: icoIcon,
+  img_pdf: pdfIcon,
+  img_shrink: kompresIcon,
+  img_rmbg: removebgIcon,
+  pdf_png: pngIcon,
+  pdf_jpg: jpgIcon,
+  pdf_docx: wordIcon,
+  pdf_shrink: kompresIcon,
+  doc_pdf: pdfIcon,
+  extract_folder: ekstrakIcon,
+  vid_mp4: mp4Icon,
+  vid_mp3: mp3Icon,
+  aud_mp3: mp3Icon,
+  aud_wav: wavIcon,
+  copy: salinIcon,
+  cut: pindahIcon,
+  rename: renameIcon,
+  props: propertiIcon,
+  trash: hapusIcon,
+};
+
 const act = (
   id: string,
   label: string,
   Icon: LucideIcon,
   tone: FileAction["tone"] = "neutral",
-): FileAction => ({ id, label, Icon, tone });
+): FileAction => ({ id, label, Icon, tone, svg: SVG_ICONS[id] });
 
 // Aksi konversi yang dijalankan oleh file_convert.rs (bukan file_actions.rs)
 export const CONVERT_ACTIONS = new Set([

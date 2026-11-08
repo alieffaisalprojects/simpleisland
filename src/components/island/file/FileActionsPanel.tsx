@@ -78,9 +78,15 @@ const Tile: React.FC<{
   const { Icon } = action;
   const lit = active || armed;
 
+  //label hover: muncul saat mouse ATAU file yang diseret ada di atas kotak
+  const [hot, setHot] = useState(false);
+  const showLabel = (active || hot) && !armed;
+
   return (
     // Pembungkus: animasi muncul berurutan
     <motion.div
+      className="relative"
+      style={{ zIndex: showLabel ? 30 : 0 }}
       initial={{ opacity: 0, scale: 0.55, y: 12, filter: "blur(6px)" }}
       animate={{
         opacity: 1,
@@ -99,7 +105,9 @@ const Tile: React.FC<{
       <motion.button
         type="button"
         data-action-id={action.id}
-        aria-label={action.label}
+        aria-label={action.label.trim()}
+        onMouseEnter={() => setHot(true)}
+        onMouseLeave={() => setHot(false)}
         onClick={(e) => {
           e.stopPropagation();
           onRun(action.id);
@@ -108,27 +116,53 @@ const Tile: React.FC<{
         animate={{ scale: lit ? 1.09 : 1 }}
         whileTap={{ scale: 0.92 }}
         transition={{ type: "spring", stiffness: 520, damping: 28 }}
-        className={`flex w-full flex-col items-center justify-center gap-[5px] rounded-[18px] text-[10.5px] font-medium leading-none transition-colors duration-150 focus:outline-none ${
+        className={`flex w-full items-center justify-center rounded-[18px] transition-colors duration-150 focus:outline-none ${
           lit ? TONE_ACTIVE[action.tone] : TONE[action.tone]
         }`}
         style={{ height: TILE_H }}
       >
-        <span className="flex h-[22px] items-center justify-center">
-          {status === "running" ? (
-            <Loader2 size={19} className="animate-spin" />
+        <span className="flex h-[36px] min-w-[36px] items-center justify-center">
+          {armed ? (
+            //ikon berganti Yakin?
+            <span className="text-[13px] font-semibold leading-none">
+              Yakin?
+            </span>
+          ) : status === "running" ? (
+            <Loader2 size={26} className="animate-spin" />
           ) : status === "done" ? (
-            <Check size={20} strokeWidth={2.6} className="text-emerald-300" />
+            <Check size={28} strokeWidth={2.6} className="text-emerald-300" />
           ) : status === "error" ? (
-            <X size={20} strokeWidth={2.6} className="text-red-300" />
+            <X size={28} strokeWidth={2.6} className="text-red-300" />
+          ) : action.svg ? (
+            //svg
+            <img
+              src={action.svg}
+              alt=""
+              draggable={false}
+              className="pointer-events-none h-[34px] w-[34px] select-none invert"
+            />
           ) : (
-            <Icon size={19} strokeWidth={2} />
+            <Icon size={30} strokeWidth={2} />
           )}
         </span>
-
-        <span className="max-w-full truncate px-1">
-          {armed ? "Yakin?" : action.label}
-        </span>
       </motion.button>
+
+      {/* label hover */}
+      <AnimatePresence>
+        {showLabel && (
+          <span className="pointer-events-none absolute inset-x-0 -top-[27px] flex justify-center">
+            <motion.span
+              initial={{ opacity: 0, y: 4, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 2, scale: 0.95 }}
+              transition={{ duration: 0.12 }}
+              className="whitespace-nowrap rounded-full bg-black/85 px-2.5 py-[4px] text-[10.5px] font-medium leading-none text-white ring-1 ring-white/20"
+            >
+              {action.label.trim()}
+            </motion.span>
+          </span>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 };
@@ -360,6 +394,9 @@ export const FileActionsPanel: React.FC<FileActionsPanelProps> = ({
   const { title, subtitle, kind } = describeItems(items);
   const KindIcon = KIND_ICON[kind];
 
+  const labelOf = (id: string) =>
+    actions.find((a) => a.id === id)?.label.trim() ?? "";
+
   // Keterangan di bawah judul berganti sesuai keadaan
   // (saat Salin / Potong disorot: "+ Copy" / "Move", seperti saat menyeret file di Windows)
   let hint: string;
@@ -370,7 +407,9 @@ export const FileActionsPanel: React.FC<FileActionsPanelProps> = ({
       items.length === 1 ? "Ketik nama baru" : "Nama dasar + nomor otomatis";
   else if (view === "props") hint = "Properti";
   else if (hovering)
-    hint = (hoverId && HOVER_HINT[hoverId]) || "Lepas di salah satu kotak";
+    hint =
+      (hoverId && (HOVER_HINT[hoverId] || labelOf(hoverId))) ||
+      "Lepas di salah satu kotak";
   else hint = subtitle;
 
   return (

@@ -10,6 +10,7 @@ export type IslandKind =
   | "system"
   | "timer"
   | "music"
+  | "menu"
   | "idle";
 export type SecondaryKind = "timer" | "music" | null;
 export type IslandPick = "timer" | "music";
@@ -32,6 +33,25 @@ export const HIT_PAD = 4;
 
 // bingkai pil musik
 export const SEC_FRAME = 4;
+
+// ---- menu klik kanan ----
+export type MenuView =
+  | "home"
+  | "prayer"
+  | "locate"
+  | "calendar"
+  | "stopwatch"
+  | "notes";
+
+// ukuran island untuk tiap halaman menu (lebar maksimal 394 = player musik)
+export const MENU_SIZES: Record<MenuView, { width: number; height: number }> = {
+  home: { width: 340, height: 116 },
+  prayer: { width: 394, height: 156 },
+  locate: { width: 394, height: 196 },
+  calendar: { width: 340, height: 262 },
+  stopwatch: { width: 340, height: 118 },
+  notes: { width: 340, height: 170 },
+};
 
 export const SPRING_EXPAND = {
   type: "spring",
@@ -259,8 +279,11 @@ export function getExpandedSize(
   kind: IslandKind,
   lyricsMode: boolean,
   filePanel: { width: number; height: number },
+  menu: { width: number; height: number } = MENU_SIZES.home,
 ): { width: number; height: number } {
   switch (kind) {
+    case "menu":
+      return menu;
     case "music": {
       const size = lyricsMode ? S.lyrics : S.expanded;
       return { width: size.width, height: size.height };
