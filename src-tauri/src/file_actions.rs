@@ -1206,7 +1206,7 @@ fn image_action(op: &str, paths: &[String]) -> Result<ActionResult, String> {
                     FilterType::Lanczos3,
                 );
                 let ext = keep_ext(src);
-                let out = unique_path(&dir, &format!("{stem} (kecil)"), &ext);
+                let out = unique_path(&dir, &format!("{stem} (Dikompres)"), &ext);
                 save_image(&small, &out, &ext)?;
                 out
             }

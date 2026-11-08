@@ -259,7 +259,7 @@ export function buildActions(
         }
       }
       out.push(act("img_pdf", single ? "PDF" : "Satu PDF", FileText, "accent"));
-      out.push(act("img_shrink", "Compress", Minimize2, "accent"));
+      out.push(act("img_shrink", "Kompres", Minimize2, "accent"));
       out.push(act("img_rmbg", "Hapus BG", Eraser, "accent"));
       out.push(act("zip", "ZIP", Archive, "accent"));
       break;
@@ -268,7 +268,7 @@ export function buildActions(
       out.push(act("pdf_png", "PNG", ImageIcon, "accent"));
       out.push(act("pdf_jpg", "JPG", ImageIcon, "accent"));
       out.push(act("pdf_docx", "Word", FileText, "accent"));
-      out.push(act("pdf_shrink", "Compress", Minimize2, "accent"));
+      out.push(act("pdf_shrink", "Kompres", Minimize2, "accent"));
       out.push(act("zip", "ZIP", Archive, "accent"));
       break;
 
@@ -313,7 +313,7 @@ export function buildActions(
 
   // Aksi umum selalu di baris paling akhir (berlaku untuk semua jenis file)
   out.push(act("copy", "Salin", Copy));
-  out.push(act("cut", "Potong", Scissors));
+  out.push(act("cut", "Pindahkan", Scissors));
   out.push(act("rename", "Rename", Pencil));
   out.push(act("props", "Properti", Info));
   out.push(act("trash", "Hapus", Trash2, "danger"));

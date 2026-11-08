@@ -27,6 +27,8 @@ import { SystemWidget } from "../modules/SystemWidget";
 import { FileActionsPanel, getFilePanelSize } from "./file/FileActionsPanel";
 import { FilePastePill, PASTE_PILL_WIDTH } from "./file/FilePastePill";
 import { useFileIsland } from "./file/useFileIsland";
+import { IslandShoulders } from "./IslandShoulders";
+import { useSettings } from "../../settings/settings";
 
 interface DynamicIslandProps {
   activeWidget: ActiveWidget;
@@ -369,7 +371,13 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const timerOn = clockTimer.active;
 
   // File diseret / dilepas ke island (logika & tampilan ada di ./file)
-  const fileIsland = useFileIsland();
+  // Pengaturan (gaya island, fitur file) dari halaman Pengaturan
+  const { settings } = useSettings();
+
+  const fileIsland = useFileIsland({
+    enabled: settings.fileDrop,
+    sounds: settings.fileSounds,
+  });
   const file = fileIsland.active ? fileIsland : null;
   const system = activeWidget === "system" ? systemNotification : null;
 
@@ -402,10 +410,35 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     getFilePanelSize(fileIsland.actions.length),
   );
 
+  // ---- Gaya island (Pengaturan > Tampilan) ----
+  // pill  : melayang, bulat penuh
+  // notch : menempel di tepi atas, sudut atas rata + bahu kiri-kanan
+  // tab   : menempel di tepi atas, sudut atas rata tanpa bahu
+  const flush = settings.style !== "pill";
+  const shoulder = settings.style === "notch" ? settings.shoulder : 0;
+  const islandTop = flush ? 0 : ISLAND_TOP;
+
+  // Pil kedua turun sedikit agar tidak menempel di tepi layar
+  const secTop = islandTop + (flush ? 6 : 0);
+
+  const bottomRadius = flush
+    ? expanded
+      ? 34
+      : Math.min(18, collapsedHeight / 2)
+    : expanded
+      ? 40
+      : collapsedHeight / 2;
+
+  const topRadius = flush ? 0 : bottomRadius;
+
   const anim = {
     width: expanded ? expandedWidth : compactWidth,
     height: expanded ? expandedHeight : collapsedHeight,
-    borderRadius: expanded ? 40 : collapsedHeight / 2,
+    // Selalu empat sudut, supaya animasi saat ganti gaya tidak bertabrakan
+    borderTopLeftRadius: topRadius,
+    borderTopRightRadius: topRadius,
+    borderBottomLeftRadius: bottomRadius,
+    borderBottomRightRadius: bottomRadius,
     // Pil Paste tidak ikut mengecil saat tombolnya ditekan
     scale: getPressScale(pressed && kind !== "paste", expanded),
   };
@@ -728,14 +761,14 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   secHit.current = showSecondary
     ? [
         Math.round(window.innerWidth / 2 + secRest - secW / 2) - HIT_PAD,
-        ISLAND_TOP - HIT_PAD,
+        secTop - HIT_PAD,
         secW + HIT_PAD * 2,
         COMPACT_HEIGHT + HIT_PAD * 2,
       ]
     : null;
 
   const secStyle: React.CSSProperties = {
-    top: ISLAND_TOP,
+    top: secTop,
     left: `calc(50% - ${secW / 2}px)`,
     width: secW,
     height: COMPACT_HEIGHT,
@@ -749,7 +782,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // Posisi akhir: di luar tepi kanan. Posisi awal: terselip di dalam island
   const hudRestX = expandedWidth / 2 + SPLIT_GAP;
   const hudHiddenX = expandedWidth / 2 - HUD_W * 0.6;
-  const hudTop = ISLAND_TOP + (expandedHeight - HUD_H) / 2;
+  const hudTop = islandTop + (expandedHeight - HUD_H) / 2;
 
   const hudStyle: React.CSSProperties = {
     top: hudTop,
@@ -764,7 +797,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     bumpAt === "plus" ? VOLUME_BTN_Y.plus : VOLUME_BTN_Y.minus;
 
   const bumpStyle: React.CSSProperties = {
-    top: ISLAND_TOP + bumpCenterY - BUMP_H / 2,
+    top: islandTop + bumpCenterY - BUMP_H / 2,
     left: `calc(50% + ${expandedWidth / 2 - BUMP_IN}px)`,
     width: BUMP_IN + BUMP_OUT,
     height: BUMP_H,
@@ -994,14 +1027,17 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         <motion.div
           className="absolute left-1/2 bg-[#050506]"
           style={{
-            top: ISLAND_TOP,
+            top: islandTop,
             x: "-50%",
             transformOrigin: "top center",
           }}
           initial={false}
           animate={anim}
           transition={spring}
-        />
+        >
+          {/* Bahu kiri-kanan (gaya notch) */}
+          <IslandShoulders size={shoulder} />
+        </motion.div>
 
         {/* Gundukan hitam di tepi island (menyatu lewat efek gooey) */}
         {volumeWindow && (
@@ -1087,7 +1123,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         onPointerCancel={() => setPressed(false)}
         className="pointer-events-auto absolute left-1/2 z-50 cursor-pointer overflow-hidden text-white"
         style={{
-          top: ISLAND_TOP,
+          top: islandTop,
           x: "-50%",
           transformOrigin: "top center",
         }}

@@ -1,6 +1,7 @@
 mod island_native; // Timer Clock Windows dan HTTP request
 mod file_actions; // Aksi file untuk drag & drop ke island
 mod file_convert; // Konversi ICO / PDF / Word + folder Explorer aktif
+mod settings; // Halaman Pengaturan (Umum + Tampilan)
 
 use base64::{engine::general_purpose, Engine as _};
 use std::sync::Mutex;
@@ -45,6 +46,7 @@ const MENU_AUTOSTART: &str = "island_autostart";
 const MENU_CENTER: &str = "island_center";
 const MENU_TOGGLE: &str = "island_toggle";
 const MENU_QUIT: &str = "island_quit";
+const MENU_SETTINGS: &str = "island_settings";
 const TRAY_ID: &str = "island-tray";
 
 // Area klik yang dilaporkan frontend.
@@ -111,6 +113,11 @@ fn island_focus(window: WebviewWindow) {
 
 // Tampilkan island jika Spotify tidak sedang aktif.
 fn show_island(app: &AppHandle) {
+    // Island dimatikan dari Pengaturan: jangan pernah ditampilkan
+    if !settings::is_enabled() {
+        return;
+    }
+
     #[cfg(windows)]
     if SPOTIFY_ACTIVE.load(Ordering::Relaxed) {
         return;
@@ -119,17 +126,6 @@ fn show_island(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_always_on_top(true);
-    }
-}
-
-// Tampilkan atau sembunyikan island.
-fn toggle_island(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(true) {
-            let _ = window.hide();
-        } else {
-            show_island(app);
-        }
     }
 }
 
@@ -152,6 +148,24 @@ fn recenter_island(app: &AppHandle) {
 // Buat menu tray dan menu klik kanan.
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
+    let island_on = settings::is_enabled();
+
+    let settings_item = MenuItem::with_id(
+        app,
+        MENU_SETTINGS,
+        "Pengaturan…",
+        true,
+        None::<&str>,
+    )?;
+
+    let toggle = CheckMenuItem::with_id(
+        app,
+        MENU_TOGGLE,
+        "Aktifkan Dynamic Island",
+        true,
+        island_on,
+        None::<&str>,
+    )?;
 
     let autostart = CheckMenuItem::with_id(
         app,
@@ -166,49 +180,40 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         MENU_CENTER,
         "Pusatkan ulang island",
-        true,
-        None::<&str>,
-    )?;
-
-    let toggle = MenuItem::with_id(
-        app,
-        MENU_TOGGLE,
-        "Tampilkan / sembunyikan island",
-        true,
+        island_on,
         None::<&str>,
     )?;
 
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Keluar", true, None::<&str>)?;
 
-    Menu::with_items(app, &[&autostart, &center, &toggle, &separator, &quit])
+    Menu::with_items(
+        app,
+        &[&settings_item, &toggle, &autostart, &center, &separator, &quit],
+    )
+}
+
+// Perbarui tampilan menu tray (centang) setelah pengaturan berubah.
+fn refresh_tray_menu(app: &AppHandle) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        if let Ok(menu) = build_menu(app) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
 }
 
 // Jalankan aksi menu.
 fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
+        MENU_SETTINGS => settings::open_settings(app),
+
         MENU_AUTOSTART => {
-            let manager = app.autolaunch();
-
-            let result = if manager.is_enabled().unwrap_or(false) {
-                manager.disable()
-            } else {
-                manager.enable()
-            };
-
-            if let Err(e) = result {
-                eprintln!("Gagal mengubah auto startup: {e}");
-            }
-
-            if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                if let Ok(menu) = build_menu(app) {
-                    let _ = tray.set_menu(Some(menu));
-                }
-            }
+            let now = app.autolaunch().is_enabled().unwrap_or(false);
+            settings::set_autostart(app, !now);
         }
 
+        MENU_TOGGLE => settings::set_island_enabled(app, !settings::is_enabled()),
         MENU_CENTER => recenter_island(app),
-        MENU_TOGGLE => toggle_island(app),
         MENU_QUIT => app.exit(0),
         _ => {}
     }
@@ -226,7 +231,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("Dynamic Island")
+        .tooltip("Dynamic Islands")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
@@ -236,7 +241,13 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                show_island(tray.app_handle());
+                let app = tray.app_handle();
+
+                if settings::is_enabled() {
+                    show_island(app);
+                } else {
+                    settings::open_settings(app);
+                }
             }
         });
 
@@ -246,27 +257,6 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 
     builder.build(app)?;
     Ok(())
-}
-
-// Aktifkan auto startup pada pemakaian pertama.
-fn enable_autostart_first_run(app: &AppHandle) {
-    let Ok(dir) = app.path().app_config_dir() else {
-        return;
-    };
-
-    let marker = dir.join(".autostart-initialized");
-
-    if marker.exists() {
-        return;
-    }
-
-    if let Err(e) = app.autolaunch().enable() {
-        eprintln!("Gagal mengaktifkan auto startup: {e}");
-        return;
-    }
-
-    let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(&marker, b"1");
 }
 
 // ---------------------------------------------------------------------------
@@ -373,9 +363,11 @@ if Process32FirstW(snapshot, &mut entry).is_ok() {
                         // Sembunyikan island tanpa menghentikan prosesnya.
                         let _ = window.hide();
                     } else {
-                        // Tampilkan kembali island.
-                        let _ = window.show();
-                        let _ = window.set_always_on_top(true);
+                        // Tampilkan kembali island (bila diaktifkan di Pengaturan).
+                        if super::settings::is_enabled() {
+                            let _ = window.show();
+                            let _ = window.set_always_on_top(true);
+                        }
                     }
                 }
             }
@@ -1004,6 +996,11 @@ mod caption_avoid {
                     continue;
                 }
 
+                // Island dimatikan dari Pengaturan: biarkan tersembunyi.
+                if !super::settings::is_enabled() {
+                    continue;
+                }
+
                 unsafe {
                     let is_topmost =
                         ((GetWindowLongPtrW(island, GWL_EXSTYLE) as u32)
@@ -1087,7 +1084,7 @@ pub fn run() {
     tauri::Builder::default()
         // Single instance harus didaftarkan pertama.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_island(app);
+            settings::on_relaunch(app);
         }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -1102,8 +1099,11 @@ pub fn run() {
         // Tombol close hanya menyembunyikan island.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                // Jendela Pengaturan ditutup betulan; hanya island yang disembunyikan.
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1130,7 +1130,11 @@ pub fn run() {
             file_actions::file_rename,
             file_actions::file_properties,
             file_convert::file_convert,
-            file_convert::file_explorer_folder
+            file_convert::file_explorer_folder,
+            settings::settings_get,
+            settings::settings_save,
+            settings::settings_recenter,
+            settings::settings_quit
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1143,13 +1147,16 @@ pub fn run() {
                 }
             }
 
-            // Aktifkan auto startup pada build release pertama.
-            if !cfg!(debug_assertions) {
-                enable_autostart_first_run(app.handle());
-            }
+            // Muat pengaturan. Island hanya tampil bila diaktifkan di Pengaturan;
+            // pada pemasangan baru island mati dan jendela Pengaturan dibuka.
+            let first_run = settings::init(app.handle());
 
             // Siapkan system tray.
             setup_tray(app.handle())?;
+
+            if first_run {
+                settings::open_settings(app.handle());
+            }
 
             #[cfg(windows)]
             {

@@ -148,7 +148,23 @@ function actionAt(pos: { x: number; y: number }): string | null {
   return el?.closest<HTMLElement>("[data-action-id]")?.dataset.actionId ?? null;
 }
 
-export function useFileIsland() {
+interface FileIslandOptions {
+  enabled?: boolean; // false: seret & lepas file dimatikan (Pengaturan > Umum)
+  sounds?: boolean; // false: tanpa suara efek (Pengaturan > Umum)
+}
+
+export function useFileIsland({
+  enabled = true,
+  sounds = true,
+}: FileIslandOptions = {}) {
+  // Suara bisa dimatikan dari Pengaturan
+  const soundsRef = useRef(sounds);
+  soundsRef.current = sounds;
+
+  const play = useCallback((name: Parameters<typeof playSound>[0]) => {
+    if (soundsRef.current) playSound(name);
+  }, []);
+
   const [items, setItems] = useState<FileItem[]>([]);
   const [hovering, setHovering] = useState(false); // masih diseret, belum dilepas
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -192,7 +208,7 @@ export function useFileIsland() {
     hoverRef.current = id;
     setHoverId(id);
 
-    if (id) playSound("choose");
+    if (id) play("choose");
   }, []);
 
   // Tutup dan buang semua (pil Paste tetap menggantung, tidak ikut dibuang)
@@ -302,7 +318,7 @@ export function useFileIsland() {
           return;
         }
 
-        if (!QUIET_ACTIONS.has(actionId)) playSound("checklist");
+        if (!QUIET_ACTIONS.has(actionId)) play("checklist");
         closeTimer.current = window.setTimeout(clear, CLOSE_AFTER_DONE_MS);
       } catch (e) {
         console.error(`Aksi "${actionId}" gagal:`, e);
@@ -348,7 +364,7 @@ export function useFileIsland() {
         setView("menu");
         setStatus({ rename: "done" });
         setMessage(res.message);
-        playSound("checklist");
+        play("checklist");
         closeTimer.current = window.setTimeout(clear, CLOSE_AFTER_DONE_MS);
       } catch (e) {
         // Tetap di tampilan Rename supaya nama bisa diperbaiki
@@ -437,7 +453,7 @@ export function useFileIsland() {
 
         if (stale()) return;
 
-        playSound("checklist");
+        play("checklist");
         setPaste({ ...cur, phase: "done", dest, message: res.message });
         pasteTimer.current = window.setTimeout(
           () => setPaste(null),
@@ -486,6 +502,12 @@ export function useFileIsland() {
 
   // Event drag & drop dari Windows
   useEffect(() => {
+    // Dimatikan dari Pengaturan: tidak mendengarkan file yang diseret
+    if (!enabled) {
+      clear();
+      return;
+    }
+
     let unlisten: (() => void) | undefined;
     let cancelled = false;
 
@@ -536,7 +558,7 @@ export function useFileIsland() {
             window.clearTimeout(closeTimer.current);
             const id = ++seq.current;
 
-            playSound("drop");
+            play("drop");
 
             try {
               let list = itemsRef.current;
@@ -578,7 +600,7 @@ export function useFileIsland() {
       cancelled = true;
       unlisten?.();
     };
-  }, [clear, setHover]);
+  }, [clear, setHover, enabled]);
 
   useEffect(
     () => () => {
