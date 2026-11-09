@@ -23,10 +23,27 @@ export interface AppSettings {
   // Tampilan
   style: IslandStyle;
   shoulder: number; // lebar bahu pada gaya notch (px)
+
+  // Ukuran island: selisih px dari ukuran bawaan (0 = bawaan)
+  pillWidth: number;
+  pillHeight: number;
+  pillTop: number; // selisih jarak pil dari tepi atas layar
+  notchWidth: number;
+  notchHeight: number;
+  tabWidth: number;
+  tabHeight: number;
 }
 
 export const SHOULDER_MIN = 8;
 export const SHOULDER_MAX = 24;
+
+// Batas slider ukuran (harus sama dengan settings.rs)
+export const WIDTH_MIN = -30;
+export const WIDTH_MAX = 60;
+export const HEIGHT_MIN = -8;
+export const HEIGHT_MAX = 20;
+export const TOP_MIN = -20;
+export const TOP_MAX = 60;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   islandEnabled: false,
@@ -35,13 +52,50 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fileSounds: true,
   style: "pill",
   shoulder: 14,
+  pillWidth: 0,
+  pillHeight: 0,
+  pillTop: 0,
+  notchWidth: 0,
+  notchHeight: 0,
+  tabWidth: 0,
+  tabHeight: 0,
 };
 
 // Pengaturan tampilan saja (untuk tombol "Kembalikan tampilan bawaan")
-export const DEFAULT_APPEARANCE: Pick<AppSettings, "style" | "shoulder"> = {
+export const DEFAULT_APPEARANCE: Pick<
+  AppSettings,
+  | "style"
+  | "shoulder"
+  | "pillWidth"
+  | "pillHeight"
+  | "pillTop"
+  | "notchWidth"
+  | "notchHeight"
+  | "tabWidth"
+  | "tabHeight"
+> = {
   style: DEFAULT_SETTINGS.style,
   shoulder: DEFAULT_SETTINGS.shoulder,
+  pillWidth: 0,
+  pillHeight: 0,
+  pillTop: 0,
+  notchWidth: 0,
+  notchHeight: 0,
+  tabWidth: 0,
+  tabHeight: 0,
 };
+
+// Nama kunci lebar / tinggi per gaya
+export const SIZE_KEYS = {
+  pill: { w: "pillWidth", h: "pillHeight" },
+  notch: { w: "notchWidth", h: "notchHeight" },
+  tab: { w: "tabWidth", h: "tabHeight" },
+} as const;
+
+// Selisih lebar / tinggi untuk sebuah gaya (default: gaya aktif)
+export function sizeOf(s: AppSettings, style: IslandStyle = s.style) {
+  return { w: s[SIZE_KEYS[style].w], h: s[SIZE_KEYS[style].h] };
+}
 
 export const STYLE_OPTIONS: { id: IslandStyle; label: string; desc: string }[] = [
   {

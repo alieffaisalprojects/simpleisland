@@ -38,7 +38,7 @@ static SPOTIFY_ACTIVE: AtomicBool = AtomicBool::new(false);
 const WINDOWS_EPOCH_OFFSET_TICKS: i64 = 116_444_736_000_000_000;
 
 // Ukuran dan posisi window island.
-const ISLAND_WINDOW_WIDTH: f64 = 520.0;
+const ISLAND_WINDOW_WIDTH: f64 = 600.0;
 const ISLAND_WINDOW_TOP: f64 = 0.0;
 const ISLAND_COMPACT_HEIGHT: f64 = 60.0;
 

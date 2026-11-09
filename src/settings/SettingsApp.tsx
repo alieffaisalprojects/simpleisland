@@ -17,11 +17,20 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { IslandShoulders } from "../components/island/IslandShoulders";
+import { ISLAND_TOP } from "../components/island/dynamic_island/constants";
 import {
   DEFAULT_APPEARANCE,
+  HEIGHT_MAX,
+  HEIGHT_MIN,
   SHOULDER_MAX,
   SHOULDER_MIN,
+  SIZE_KEYS,
   STYLE_OPTIONS,
+  TOP_MAX,
+  TOP_MIN,
+  WIDTH_MAX,
+  WIDTH_MIN,
+  sizeOf,
   useSettings,
 } from "./settings";
 import type { AppSettings, IslandStyle } from "./settings";
@@ -139,14 +148,72 @@ const ActionButton: React.FC<{
   </button>
 );
 
+// slider, nilai disimpan saat dilepas
+
+const SliderRow: React.FC<{
+  title: string;
+  desc: string;
+  value: number;
+  min: number;
+  max: number;
+  display: (value: number) => string;
+  onCommit: (value: number) => void;
+}> = ({ title, desc, value, min, max, display, onCommit }) => {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => setDraft(value), [value]);
+
+  const commitDraft = () => {
+    if (draft !== value) onCommit(draft);
+  };
+
+  return (
+    <div className="px-4 py-3.5">
+      <div className="mb-2 flex items-center justify-between">
+        <div>
+          <div className="text-[13.5px] font-medium">{title}</div>
+          <div className="mt-[2px] text-[12px] text-white/50">{desc}</div>
+        </div>
+        <span className="rounded-[8px] bg-white/10 px-2 py-[3px] text-[12px] tabular-nums text-white/80">
+          {display(draft)}
+        </span>
+      </div>
+
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={draft}
+        aria-label={title}
+        onChange={(e) => setDraft(Number(e.target.value))}
+        onPointerUp={commitDraft}
+        onKeyUp={commitDraft}
+        onBlur={commitDraft}
+        className="w-full accent-sky-400"
+      />
+    </div>
+  );
+};
+
+// tampilan selisih ukuran: 0 = bawaan
+const fmtOffset = (v: number) =>
+  v === 0 ? "Bawaan" : `${v > 0 ? "+" : ""}${v} px`;
+
 // pratinjau bentuk island
 
-const ShapePreview: React.FC<{ style: IslandStyle; shoulder: number }> = ({
-  style,
-  shoulder,
-}) => {
+const ShapePreview: React.FC<{
+  style: IslandStyle;
+  shoulder: number;
+  dw?: number;
+  dh?: number;
+  dtop?: number;
+}> = ({ style, shoulder, dw = 0, dh = 0, dtop = 0 }) => {
   const flush = style !== "pill";
-  const r = 16;
+  const w = Math.round(108 + dw * 0.5);
+  const h = Math.round(32 + dh * 0.5);
+  const top = flush ? 0 : Math.max(0, Math.round(10 + dtop * 0.4));
+  const r = Math.min(16, h / 2);
 
   return (
     <div
@@ -159,9 +226,9 @@ const ShapePreview: React.FC<{ style: IslandStyle; shoulder: number }> = ({
       <div
         className="absolute left-1/2 bg-[#050506]"
         style={{
-          top: flush ? 0 : 10,
-          width: 108,
-          height: 32,
+          top,
+          width: w,
+          height: h,
           transform: "translateX(-50%)",
           borderTopLeftRadius: flush ? 0 : r,
           borderTopRightRadius: flush ? 0 : r,
@@ -304,9 +371,16 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
     if (draft !== settings.shoulder) commit({ shoulder: draft });
   };
 
-  const isDefault =
-    settings.style === DEFAULT_APPEARANCE.style &&
-    settings.shoulder === DEFAULT_APPEARANCE.shoulder;
+  const isDefault = (
+    Object.keys(DEFAULT_APPEARANCE) as (keyof typeof DEFAULT_APPEARANCE)[]
+  ).every((k) => settings[k] === DEFAULT_APPEARANCE[k]);
+
+  // ukuran gaya yang sedang dipilih
+  const keys = SIZE_KEYS[settings.style];
+  const size = sizeOf(settings);
+  const styleLabel =
+    STYLE_OPTIONS.find((o) => o.id === settings.style)?.label ?? "";
+  const topMin = Math.max(TOP_MIN, -ISLAND_TOP);
 
   return (
     <>
@@ -314,6 +388,7 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
         <div className="grid grid-cols-3 gap-3 p-3">
           {STYLE_OPTIONS.map((opt) => {
             const selected = settings.style === opt.id;
+            const sz = sizeOf(settings, opt.id);
 
             return (
               <button
@@ -327,7 +402,13 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
                     : "bg-white/[0.045] ring-1 ring-white/10 hover:bg-white/[0.085]"
                 }`}
               >
-                <ShapePreview style={opt.id} shoulder={draft} />
+                <ShapePreview
+                  style={opt.id}
+                  shoulder={draft}
+                  dw={sz.w}
+                  dh={sz.h}
+                  dtop={opt.id === "pill" ? settings.pillTop : 0}
+                />
 
                 <div className="flex items-center gap-2 px-1">
                   <span className="text-[13px] font-semibold tracking-[-0.015em]">
@@ -386,6 +467,40 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <Card title={`Ukuran ${styleLabel}`}>
+        <SliderRow
+          title="Lebar"
+          desc="Lebar island saat kecil."
+          value={size.w}
+          min={WIDTH_MIN}
+          max={WIDTH_MAX}
+          display={fmtOffset}
+          onCommit={(v) => commit({ [keys.w]: v } as Partial<AppSettings>)}
+        />
+
+        <SliderRow
+          title="Tinggi"
+          desc="Tinggi island saat kecil."
+          value={size.h}
+          min={HEIGHT_MIN}
+          max={HEIGHT_MAX}
+          display={fmtOffset}
+          onCommit={(v) => commit({ [keys.h]: v } as Partial<AppSettings>)}
+        />
+
+        {settings.style === "pill" && (
+          <SliderRow
+            title="Jarak dari atas layar"
+            desc="Jarak pil dari tepi atas monitor."
+            value={settings.pillTop}
+            min={topMin}
+            max={TOP_MAX}
+            display={(v) => `${Math.max(0, ISLAND_TOP + v)} px`}
+            onCommit={(v) => commit({ pillTop: v })}
+          />
+        )}
+      </Card>
 
       <div className="flex items-center justify-between gap-4 px-1">
 

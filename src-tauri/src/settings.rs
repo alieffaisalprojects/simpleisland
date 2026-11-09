@@ -35,6 +35,11 @@ static ISLAND_ENABLED: AtomicBool = AtomicBool::new(false);
 
 const STYLES: [&str; 3] = ["pill", "notch", "tab"];
 
+// Batas offset ukuran island (px dari ukuran bawaan)
+const WIDTH_RANGE: (i32, i32) = (-30, 60);
+const HEIGHT_RANGE: (i32, i32) = (-8, 20);
+const TOP_RANGE: (i32, i32) = (-20, 60);
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -48,6 +53,16 @@ pub struct Settings {
     pub style: String,
     // Lebar "bahu" kiri-kanan pada gaya notch (px)
     pub shoulder: u32,
+
+    // Ukuran island: selisih px dari ukuran bawaan (0 = bawaan)
+    pub pill_width: i32,
+    pub pill_height: i32,
+    // Jarak pil dari tepi atas layar (selisih dari jarak bawaan)
+    pub pill_top: i32,
+    pub notch_width: i32,
+    pub notch_height: i32,
+    pub tab_width: i32,
+    pub tab_height: i32,
 }
 
 impl Default for Settings {
@@ -59,6 +74,13 @@ impl Default for Settings {
             file_sounds: true,
             style: "pill".to_string(),
             shoulder: 14,
+            pill_width: 0,
+            pill_height: 0,
+            pill_top: 0,
+            notch_width: 0,
+            notch_height: 0,
+            tab_width: 0,
+            tab_height: 0,
         }
     }
 }
@@ -70,6 +92,14 @@ impl Settings {
         }
 
         self.shoulder = self.shoulder.clamp(8, 24);
+
+        self.pill_width = self.pill_width.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1);
+        self.pill_height = self.pill_height.clamp(HEIGHT_RANGE.0, HEIGHT_RANGE.1);
+        self.pill_top = self.pill_top.clamp(TOP_RANGE.0, TOP_RANGE.1);
+        self.notch_width = self.notch_width.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1);
+        self.notch_height = self.notch_height.clamp(HEIGHT_RANGE.0, HEIGHT_RANGE.1);
+        self.tab_width = self.tab_width.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1);
+        self.tab_height = self.tab_height.clamp(HEIGHT_RANGE.0, HEIGHT_RANGE.1);
         self
     }
 }

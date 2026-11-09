@@ -17,7 +17,7 @@ import { FileActionsPanel, getFilePanelSize } from "./file/FileActionsPanel";
 import { FilePastePill } from "./file/FilePastePill";
 import { useFileIsland } from "./file/useFileIsland";
 import { IslandShoulders } from "./IslandShoulders";
-import { useSettings } from "../../settings/settings";
+import { sizeOf, useSettings } from "../../settings/settings";
 import {
   IslandPick,
   S,
@@ -184,8 +184,17 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     kind === "idle" ||
     (kind === "music" && pausedIdle && !lyricsMode);
 
-  const compactWidth = getCompactWidth(kind, isMini, lyricsMode);
-  const collapsedHeight = isMini ? S.mini.height : COMPACT_HEIGHT;
+  // ukuran dari Pengaturan (selisih dari ukuran bawaan, sesuai gaya aktif)
+  const adj = sizeOf(settings);
+  const compactH = Math.max(20, COMPACT_HEIGHT + adj.h);
+  const compactWidth = Math.max(
+    36,
+    getCompactWidth(kind, isMini, lyricsMode) + adj.w,
+  );
+  const collapsedHeight = Math.max(
+    20,
+    (isMini ? S.mini.height : COMPACT_HEIGHT) + adj.h,
+  );
 
   const { width: expandedWidth, height: expandedHeight } = getExpandedSize(
     kind,
@@ -200,7 +209,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // tab   : menempel tanpa bahu
   const flush = settings.style !== "pill";
   const shoulder = settings.style === "notch" ? settings.shoulder : 0;
-  const islandTop = flush ? 0 : ISLAND_TOP;
+  const islandTop = flush ? 0 : Math.max(0, ISLAND_TOP + settings.pillTop);
 
   // pil kedua turun
   const secTop = islandTop + (flush ? 6 : 0);
@@ -302,7 +311,13 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   // tinggi window
   useEffect(() => {
-    const targetHeight = expanded ? expandedHeight + 24 : COMPACT_WINDOW_HEIGHT;
+    // tambahan tinggi window saat pil diturunkan / dipertinggi
+    const extra =
+      Math.max(0, islandTop - ISLAND_TOP) +
+      (expanded ? 0 : Math.max(0, adj.h));
+
+    const targetHeight =
+      (expanded ? expandedHeight + 24 : COMPACT_WINDOW_HEIGHT) + extra;
 
     const apply = () =>
       invoke("island_set_height", { height: targetHeight }).catch((e) =>
@@ -319,7 +334,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     }
 
     void apply();
-  }, [expanded, expandedHeight]);
+  }, [expanded, expandedHeight, islandTop, adj.h]);
 
   // mouse keluar dari jendela -> sembunyikan tab
   useEffect(() => {
@@ -522,7 +537,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // ---- pil kedua ----
 
   // lebar = tinggi
-  const secW = COMPACT_HEIGHT;
+  const secW = compactH;
 
   // posisi akhir
   const secRest = compactWidth / 2 + SPLIT_GAP + secW / 2;
@@ -536,7 +551,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         Math.round(window.innerWidth / 2 + secRest - secW / 2) - HIT_PAD,
         secTop - HIT_PAD,
         secW + HIT_PAD * 2,
-        COMPACT_HEIGHT + HIT_PAD * 2,
+        compactH + HIT_PAD * 2,
       ]
     : null;
 
@@ -544,8 +559,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     top: secTop,
     left: `calc(50% - ${secW / 2}px)`,
     width: secW,
-    height: COMPACT_HEIGHT,
-    borderRadius: COMPACT_HEIGHT / 2,
+    height: compactH,
+    borderRadius: compactH / 2,
     transformOrigin: "left center",
   };
 
@@ -640,7 +655,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         key="timer-compact"
         variant="compact"
         width={compactWidth}
-        height={COMPACT_HEIGHT}
+        height={compactH}
       >
         <TimerCompact clock={clockTimer} />
       </MorphLayer>
@@ -684,7 +699,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         key="file-compact"
         variant="compact"
         width={compactWidth}
-        height={COMPACT_HEIGHT}
+        height={compactH}
       >
         <div className="flex h-full w-full items-center gap-2 px-[6px] pr-3 text-white">
           <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] bg-white/10">
@@ -748,6 +763,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             onLockedChange={setLocked}
             onVolumeStep={handleVolumeStep}
             onVolumePanelChange={handleVolumePanelChange}
+            widthAdjust={adj.w}
+            heightAdjust={adj.h}
           />
         </motion.div>
       );

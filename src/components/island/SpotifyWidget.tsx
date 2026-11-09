@@ -30,6 +30,10 @@ interface SpotifyWidgetProps {
   // Menyembunyikan tampilan mini saat musik tidak aktif
   isMini?: boolean;
 
+  // Selisih ukuran pil compact dari Pengaturan (px)
+  widthAdjust?: number;
+  heightAdjust?: number;
+
   // Data lirik
   lyrics: LyricsState;
 
@@ -1232,6 +1236,8 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
   onSeek,
   isExpanded = false,
   isMini = false,
+  widthAdjust = 0,
+  heightAdjust = 0,
   lyrics,
   lyricsMode = false,
   onLyricsModeChange,
@@ -1306,9 +1312,14 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
   const dir = lyricsMode ? 1 : -1;
 
   // Menentukan ukuran tampilan mini
-  const miniSize = lyricsMode
+  const baseSize = lyricsMode
     ? SPOTIFY_SIZES.lyricsMini
     : SPOTIFY_SIZES.compact;
+
+  const miniSize = {
+    width: baseSize.width + widthAdjust,
+    height: baseSize.height + heightAdjust,
+  };
 
   return (
     <div className="relative h-full w-full">
