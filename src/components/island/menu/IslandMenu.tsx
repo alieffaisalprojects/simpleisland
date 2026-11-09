@@ -1,10 +1,3 @@
-/**
- * File: IslandMenu.tsx
- * Kegunaan: Menu island (baris status + menu).
- * Isi: Salat (lokasi real-time), Kalender, Stopwatch, Catatan, Wi-Fi, Bluetooth, Mode pesawat.
- * Tombol kembali di setiap halaman mengarah ke layar utama menu.
- */
-
 import React, { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useDragControls } from "framer-motion";
 import type { PanInfo } from "framer-motion";
@@ -27,7 +20,7 @@ import {
   getMenuBack,
   swapFade,
 } from "../dynamic_island/constants";
-import shalatIcon from "../../../assets/styles/icons/sajadah.svg";
+import shalatIcon from "../../../assets/styles/icons/sholat.svg";
 import kalenderIcon from "../../../assets/styles/icons/kalender.svg";
 import stopwatchIcon from "../../../assets/styles/icons/stopwatch.svg";
 import catatanIcon from "../../../assets/styles/icons/catatan.svg";
@@ -44,7 +37,9 @@ import {
   civilIn,
   fmtTime,
   getPrayerState,
+  getSkyPhase,
 } from "./prayer";
+import { FORCE_PHASE, PrayerSky } from "./PrayerSky";
 import { GeoLocation, Place, searchPlaces, useLocation } from "./useLocation";
 import { usePrayerSchedule } from "./usePrayerSchedule";
 import { stopwatch, useStopwatchRunning } from "./stopwatchStore";
@@ -56,7 +51,7 @@ interface IslandMenuProps {
   view: MenuView;
   onViewChange: (view: MenuView) => void;
   onClose: () => void;
-  /** true saat menu sedang menunggu dialog izin lokasi. */
+  /** Status dialog izin lokasi. */
   onBusyChange: (busy: boolean) => void;
 }
 
@@ -90,7 +85,7 @@ function countdown(ms: number): string {
   return h > 0 ? `dalam ${h} j ${m} mnt` : `dalam ${m} mnt`;
 }
 
-//urutan menu saat digeser kiri / kanan
+// Urutan menu saat digeser.
 const SWIPE_ORDER: MenuView[] = [
   "prayer",
   "calendar",
@@ -102,7 +97,7 @@ const SWIPE_ORDER: MenuView[] = [
 const SWIPE_DIST = 60;
 const SWIPE_SPEED = 500;
 
-//suara menu: hover = choose, klik = drop
+// Efek suara menu.
 const sfxCache: Record<string, HTMLAudioElement> = {};
 
 function playSfx(src: string, volume = 0.6) {
@@ -112,7 +107,7 @@ function playSfx(src: string, volume = 0.6) {
     a.volume = volume;
     void a.play().catch(() => {});
   } catch {
-    /* abaikan */
+    /* Abaikan */
   }
 }
 
@@ -125,14 +120,14 @@ function useNow(intervalMs: number): Date {
   return now;
 }
 
-// ---- bagian umum ----
+// Komponen umum.
 
 const ring =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70";
 
 const Header: React.FC<{
   title?: React.ReactNode;
-  /** tombol kembali sekarang berupa tab di luar island (lihat DynamicIsland) */
+  /** Tombol kembali berada di luar island. */
   onBack?: () => void;
   right?: React.ReactNode;
 }> = ({ title, right }) => (
@@ -142,7 +137,7 @@ const Header: React.FC<{
   </div>
 );
 
-// ---- layar utama ----
+// Tombol menu.
 
 interface TileProps {
   name: string;
@@ -151,7 +146,7 @@ interface TileProps {
   tone?: "sky" | "amber";
   dot?: boolean;
   onClick: () => void;
-  /** klik kanan: nyala / mati langsung */
+  /** Klik kanan untuk mengubah status. */
   onContext?: () => void;
 }
 
@@ -196,7 +191,7 @@ const MenuTile: React.FC<TileProps> = ({
         active ? lit : "bg-white/[0.07] hover:bg-white/[0.13]"
       } ${ring}`}
     >
-      {/* SVG  */}
+      {/* Ikon menu. */}
       <img
         src={icon}
         alt=""
@@ -213,6 +208,8 @@ const MenuTile: React.FC<TileProps> = ({
   );
 };
 
+// Halaman utama menu.
+
 const HomeView: React.FC<{
   swRunning: boolean;
   sys: SystemInfo;
@@ -220,7 +217,7 @@ const HomeView: React.FC<{
 }> = ({ swRunning, sys, onOpen }) => {
   const { status, radios } = sys;
 
-  // nama hanya untuk pembaca layar dan tooltip, tidak ditampilkan
+  // Daftar aplikasi.
   const apps: { id: MenuView; name: string; icon: string }[] = [
     { id: "prayer", name: "Jadwal Sholat", icon: shalatIcon },
     { id: "calendar", name: "Kalender", icon: kalenderIcon },
@@ -275,14 +272,14 @@ const HomeView: React.FC<{
   );
 };
 
-// ---- jadwal salat ----
+// Jadwal salat.
 
 const ARC_W = 224;
 const ARC_BASE = 58;
 const ARC_H = 44;
 const colX = (i: number) => (ARC_W / FIVE.length) * (i + 0.5);
 
-// lengkung simetris dari Subuh (kiri) ke Isya (kanan), puncak di tengah
+// Membentuk lengkungan jadwal salat.
 const curveY = (x: number): number => {
   const c0 = colX(0);
   const c4 = colX(FIVE.length - 1);
@@ -335,7 +332,7 @@ const PrayerView: React.FC<{
     ),
   );
 
-  // waktu -> posisi x: lima salat berjarak sama, di antaranya diinterpolasi
+  // Menghitung posisi waktu pada lengkungan.
   const anchors = FIVE.map((key, i) => ({
     t: today[key].getTime(),
     x: colX(i),
@@ -353,236 +350,233 @@ const PrayerView: React.FC<{
   };
   const xNow = xAt(nowT);
   const yNow = curveY(xNow);
-  // siang = terbit sampai Maghrib; selain itu gelap, pakai bulan
+
+  // Menentukan tampilan siang atau malam.
   const isDay =
     nowT >= today.sunrise.getTime() && nowT < today.maghrib.getTime();
 
+  // Menentukan fase langit.
+  const phase = FORCE_PHASE ?? getSkyPhase(now, today);
+
   return (
-    <div className="flex h-full w-full flex-col gap-2 p-[18px]">
-      <Header
-        onBack={onBack}
-        title={
-          <button
-            type="button"
-            onClick={onLocation}
-            title="Ubah lokasi"
-            className={`flex max-w-[190px] items-center gap-1 rounded-full py-1 pr-2 text-[11px] text-white/70 transition-colors hover:text-white ${ring}`}
-          >
-            {locating ? (
-              <Loader2 size={12} className="shrink-0 animate-spin" />
-            ) : (
-              <MapPin size={12} className="shrink-0" />
-            )}
-            <span className="truncate">
-              {city}
-              {estimate ? " · memuat" : stale ? " · lokasi lama" : ""}
-            </span>
-          </button>
-        }
-        right={
-          <div className="flex items-baseline gap-2 whitespace-nowrap">
-            <span className="text-[11px] text-white/55">
-              {shortDateIn(now, tz)}
-            </span>
-            <span className="text-[13px] font-semibold tabular-nums">
-              {fmtTime(now, tz)}
-            </span>
-          </div>
-        }
-      />
+    <div className="relative h-full w-full overflow-hidden">
+      <PrayerSky phase={phase} />
 
-      <div className="flex min-h-0 flex-1 items-center gap-[18px]">
-        {/* salat berikutnya */}
-        <div className="w-[124px] shrink-0">
-          <div className="text-[10.5px] text-white/50">Berikutnya</div>
-          <div className="mt-0.5 text-[24px] font-semibold leading-none">
-            {PRAYER_LABEL[next.key]}
-          </div>
-          <div className="mt-1.5 flex items-baseline gap-1.5 whitespace-nowrap">
-            <span
-              className="text-[13px] font-semibold tabular-nums"
-              style={{ color: PRAYER_COLOR[next.key] }}
+      <div
+        className="relative z-10 flex h-full w-full flex-col gap-2 p-[18px]"
+        style={{ textShadow: "0 1px 6px rgba(0,0,0,0.35)" }}
+      >
+        <Header
+          onBack={onBack}
+          title={
+            <button
+              type="button"
+              onClick={onLocation}
+              title="Ubah lokasi"
+              className={`flex max-w-[190px] items-center gap-1 rounded-full py-1 pr-2 text-[11px] text-white/70 transition-colors hover:text-white ${ring}`}
             >
-              {fmtTime(next.time, tz)}
-            </span>
-            <span className="text-[10.5px] text-white/50">
-              {countdown(next.time.getTime() - nowT)}
-            </span>
-          </div>
-          <div className="mt-2 h-[2px] w-full overflow-hidden rounded-full bg-white/15">
-            <div
-              className="h-full rounded-full"
-              style={{ width: `${progress * 100}%`, background: color }}
-            />
-          </div>
-        </div>
+              {locating ? (
+                <Loader2 size={12} className="shrink-0 animate-spin" />
+              ) : (
+                <MapPin size={12} className="shrink-0" />
+              )}
+              <span className="truncate">
+                {city}
+                {estimate ? " · memuat" : stale ? " · lokasi lama" : ""}
+              </span>
+            </button>
+          }
+          right={
+            <div className="flex items-baseline gap-2 whitespace-nowrap">
+              <span className="text-[11px] text-white/55">
+                {shortDateIn(now, tz)}
+              </span>
+              <span className="text-[13px] font-semibold tabular-nums">
+                {fmtTime(now, tz)}
+              </span>
+            </div>
+          }
+        />
 
-        {/* lengkung Subuh -> Isya */}
-        <div className="shrink-0" style={{ width: ARC_W }}>
-          <svg
-            width={ARC_W}
-            height={ARC_BASE + 6}
-            viewBox={`0 0 ${ARC_W} ${ARC_BASE + 6}`}
-            aria-hidden="true"
-          >
-            <line
-              x1={4}
-              x2={ARC_W - 4}
-              y1={ARC_BASE}
-              y2={ARC_BASE}
-              stroke="white"
-              strokeOpacity={0.12}
-            />
-            <path
-              d={segPath(colX(0), colX(FIVE.length - 1))}
-              fill="none"
-              stroke="white"
-              strokeOpacity={0.2}
-              strokeWidth={1.5}
-              strokeLinecap="round"
-            />
-            {/* bagian yang sudah dilalui, warna sesuai periode salat */}
-            {FIVE.slice(0, -1).map((key, i) => {
-              const xa = colX(i);
-              const xb = Math.min(colX(i + 1), xNow);
-              if (xb <= xa) return null;
-              return (
-                <path
-                  key={key}
-                  d={segPath(xa, xb)}
-                  fill="none"
-                  stroke={PRAYER_COLOR[key]}
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                />
-              );
-            })}
-            {/* titik tiap waktu salat */}
-            {FIVE.map((key, i) => {
-              const passed = today[key].getTime() <= nowT;
-              const isNext = key === next.key;
-              return (
-                <circle
-                  key={key}
-                  cx={colX(i)}
-                  cy={curveY(colX(i))}
-                  r={isNext ? 3.6 : 2.8}
-                  fill={
-                    isNext ? "#050506" : passed ? PRAYER_COLOR[key] : "white"
-                  }
-                  fillOpacity={isNext || passed ? 1 : 0.3}
-                  stroke={isNext ? PRAYER_COLOR[key] : "none"}
-                  strokeWidth={1.7}
-                />
-              );
-            })}
-            {/* langit gelap: bintang kecil */}
-            {!isDay &&
-              [
-                [30, 14],
-                [86, 8],
-                [150, 12],
-                [196, 22],
-              ].map(([sx, sy]) => (
-                <circle
-                  key={sx}
-                  cx={sx}
-                  cy={sy}
-                  r={0.9}
-                  fill="white"
-                  opacity={0.35}
-                />
-              ))}
-            {/* siang: matahari, gelap: bulan sabit */}
-            {isDay ? (
-              <>
-                <circle
-                  cx={xNow}
-                  cy={yNow}
-                  r={10}
-                  fill={color}
-                  opacity={0.16}
-                />
-                {Array.from({ length: 8 }, (_, i) => {
-                  const a = (i * Math.PI) / 4;
-                  return (
-                    <line
-                      key={i}
-                      x1={xNow + Math.cos(a) * 7.2}
-                      y1={yNow + Math.sin(a) * 7.2}
-                      x2={xNow + Math.cos(a) * 9.4}
-                      y2={yNow + Math.sin(a) * 9.4}
-                      stroke={color}
-                      strokeWidth={1.4}
-                      strokeLinecap="round"
-                    />
-                  );
-                })}
-                <circle cx={xNow} cy={yNow} r={4.6} fill={color} />
-              </>
-            ) : (
-              <>
-                <defs>
-                  <mask id="island-moon-mask">
-                    <rect
-                      x={xNow - 12}
-                      y={yNow - 12}
-                      width={24}
-                      height={24}
-                      fill="white"
-                    />
-                    <circle
-                      cx={xNow + 2.6}
-                      cy={yNow - 1.8}
-                      r={4.3}
-                      fill="black"
-                    />
-                  </mask>
-                </defs>
-                <circle
-                  cx={xNow}
-                  cy={yNow}
-                  r={10}
-                  fill="#C9C3FF"
-                  opacity={0.16}
-                />
-                <circle
-                  cx={xNow}
-                  cy={yNow}
-                  r={5.4}
-                  fill="#E8E5FF"
-                  mask="url(#island-moon-mask)"
-                />
-              </>
-            )}
-          </svg>
+        <div className="flex min-h-0 flex-1 items-center gap-[18px]">
+          {/* Informasi salat berikutnya. */}
+          <div className="w-[124px] shrink-0">
+            <div className="text-[10.5px] text-white/50">Berikutnya</div>
+            <div className="mt-0.5 text-[24px] font-semibold leading-none">
+              {PRAYER_LABEL[next.key]}
+            </div>
+            <div className="mt-1.5 flex items-baseline gap-1.5 whitespace-nowrap">
+              <span
+                className="text-[13px] font-semibold tabular-nums"
+                style={{ color: PRAYER_COLOR[next.key] }}
+              >
+                {fmtTime(next.time, tz)}
+              </span>
+              <span className="text-[10.5px] text-white/50">
+                {countdown(next.time.getTime() - nowT)}
+              </span>
+            </div>
+            <div className="mt-2 h-[2px] w-full overflow-hidden rounded-full bg-white/15">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${progress * 100}%`, background: color }}
+              />
+            </div>
+          </div>
 
-          <div className="grid grid-cols-5 text-center">
-            {FIVE.map((key) => {
-              const isNext = key === next.key;
-              const passed = today[key].getTime() <= nowT;
-              return (
-                <div key={key} className="min-w-0">
-                  <div
-                    className={`text-[9.5px] ${isNext ? "text-white" : "text-white/50"}`}
-                  >
-                    {PRAYER_LABEL[key]}
+          {/* Grafik waktu salat. */}
+          <div className="shrink-0" style={{ width: ARC_W }}>
+            <svg
+              width={ARC_W}
+              height={ARC_BASE + 6}
+              viewBox={`0 0 ${ARC_W} ${ARC_BASE + 6}`}
+              aria-hidden="true"
+            >
+              <line
+                x1={4}
+                x2={ARC_W - 4}
+                y1={ARC_BASE}
+                y2={ARC_BASE}
+                stroke="white"
+                strokeOpacity={0.12}
+              />
+              <path
+                d={segPath(colX(0), colX(FIVE.length - 1))}
+                fill="none"
+                stroke="white"
+                strokeOpacity={0.2}
+                strokeWidth={1.5}
+                strokeLinecap="round"
+              />
+
+              {/* Garis waktu yang sudah dilewati. */}
+              {FIVE.slice(0, -1).map((key, i) => {
+                const xa = colX(i);
+                const xb = Math.min(colX(i + 1), xNow);
+                if (xb <= xa) return null;
+                return (
+                  <path
+                    key={key}
+                    d={segPath(xa, xb)}
+                    fill="none"
+                    stroke={PRAYER_COLOR[key]}
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                  />
+                );
+              })}
+
+              {/* Penanda setiap waktu salat. */}
+              {FIVE.map((key, i) => {
+                const passed = today[key].getTime() <= nowT;
+                const isNext = key === next.key;
+                return (
+                  <circle
+                    key={key}
+                    cx={colX(i)}
+                    cy={curveY(colX(i))}
+                    r={isNext ? 3.6 : 2.8}
+                    fill={
+                      isNext ? "#050506" : passed ? PRAYER_COLOR[key] : "white"
+                    }
+                    fillOpacity={isNext || passed ? 1 : 0.3}
+                    stroke={isNext ? PRAYER_COLOR[key] : "none"}
+                    strokeWidth={1.7}
+                  />
+                );
+              })}
+
+              {/* Penanda posisi matahari atau bulan. */}
+              {isDay ? (
+                <>
+                  <circle
+                    cx={xNow}
+                    cy={yNow}
+                    r={10}
+                    fill={color}
+                    opacity={0.16}
+                  />
+                  {Array.from({ length: 8 }, (_, i) => {
+                    const a = (i * Math.PI) / 4;
+                    return (
+                      <line
+                        key={i}
+                        x1={xNow + Math.cos(a) * 7.2}
+                        y1={yNow + Math.sin(a) * 7.2}
+                        x2={xNow + Math.cos(a) * 9.4}
+                        y2={yNow + Math.sin(a) * 9.4}
+                        stroke={color}
+                        strokeWidth={1.4}
+                        strokeLinecap="round"
+                      />
+                    );
+                  })}
+                  <circle cx={xNow} cy={yNow} r={4.6} fill={color} />
+                </>
+              ) : (
+                <>
+                  <defs>
+                    <mask id="island-moon-mask">
+                      <rect
+                        x={xNow - 12}
+                        y={yNow - 12}
+                        width={24}
+                        height={24}
+                        fill="white"
+                      />
+                      <circle
+                        cx={xNow + 2.6}
+                        cy={yNow - 1.8}
+                        r={4.3}
+                        fill="black"
+                      />
+                    </mask>
+                  </defs>
+                  <circle
+                    cx={xNow}
+                    cy={yNow}
+                    r={10}
+                    fill="#C9C3FF"
+                    opacity={0.16}
+                  />
+                  <circle
+                    cx={xNow}
+                    cy={yNow}
+                    r={5.4}
+                    fill="#E8E5FF"
+                    mask="url(#island-moon-mask)"
+                  />
+                </>
+              )}
+            </svg>
+
+            <div className="grid grid-cols-5 text-center">
+              {FIVE.map((key) => {
+                const isNext = key === next.key;
+                const passed = today[key].getTime() <= nowT;
+                return (
+                  <div key={key} className="min-w-0">
+                    <div
+                      className={`text-[9.5px] ${isNext ? "text-white" : "text-white/50"}`}
+                    >
+                      {PRAYER_LABEL[key]}
+                    </div>
+                    <div
+                      className="text-[11px] font-semibold tabular-nums"
+                      style={{
+                        color:
+                          isNext || passed
+                            ? PRAYER_COLOR[key]
+                            : "rgba(255,255,255,0.55)",
+                        opacity: isNext ? 1 : passed ? 0.75 : 1,
+                      }}
+                    >
+                      {fmtTime(today[key], tz)}
+                    </div>
                   </div>
-                  <div
-                    className="text-[11px] font-semibold tabular-nums"
-                    style={{
-                      color:
-                        isNext || passed
-                          ? PRAYER_COLOR[key]
-                          : "rgba(255,255,255,0.55)",
-                      opacity: isNext ? 1 : passed ? 0.75 : 1,
-                    }}
-                  >
-                    {fmtTime(today[key], tz)}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
@@ -590,7 +584,7 @@ const PrayerView: React.FC<{
   );
 };
 
-// ---- pilih lokasi ----
+// Pilih lokasi.
 
 const sourceLabel = (l: GeoLocation): string =>
   l.source === "gps"
@@ -622,14 +616,15 @@ const LocateView: React.FC<{
     invoke("island_focus").catch(() => {});
   }, []);
 
-  // cari setelah berhenti mengetik
+  // Cari lokasi setelah mengetik.
   useEffect(() => {
     const term = q.trim();
-    if (term.length < 2) {
-      setResults([]);
-      setEmpty(false);
-      return;
-    }
+if (term.length < 2) {
+  setResults([]);
+  setEmpty(false);
+  setSearching(false);
+  return;
+}
     let cancelled = false;
     setSearching(true);
     const timer = window.setTimeout(async () => {
@@ -748,7 +743,7 @@ const LocateView: React.FC<{
   );
 };
 
-// ---- kalender ----
+// Kalender.
 
 const CalendarView: React.FC<{ now: Date; onBack: () => void }> = ({
   now,
@@ -765,7 +760,7 @@ const CalendarView: React.FC<{ now: Date; onBack: () => void }> = ({
       return { y: d.getFullYear(), m: d.getMonth() };
     });
 
-  // pekan dimulai Senin
+  // Menentukan susunan tanggal kalender.
   const offset = (new Date(cursor.y, cursor.m, 1).getDay() + 6) % 7;
   const total = new Date(cursor.y, cursor.m + 1, 0).getDate();
   const cells: (number | null)[] = [
@@ -846,7 +841,7 @@ const CalendarView: React.FC<{ now: Date; onBack: () => void }> = ({
   );
 };
 
-// ---- stopwatch ----
+// Stopwatch.
 
 const StopwatchView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const running = useStopwatchRunning();
@@ -892,7 +887,7 @@ const StopwatchView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             aria-label="Atur ulang"
             onClick={() => {
               stopwatch.reset();
-              // saat dijeda tidak ada interval yang memperbarui layar
+              // Perbarui tampilan saat stopwatch dijeda.
               setMs(stopwatch.elapsed());
             }}
             disabled={ms === 0 && !running}
@@ -918,7 +913,7 @@ const StopwatchView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   );
 };
 
-// ---- catatan ----
+// Catatan.
 
 const NOTES_KEY = "island.notes";
 
@@ -931,7 +926,7 @@ const NotesView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     }
   });
 
-  // minta fokus keyboard untuk window island
+  // Fokuskan keyboard ke window island.
   useEffect(() => {
     invoke("island_focus").catch(() => {});
   }, []);
@@ -941,7 +936,7 @@ const NotesView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     try {
       localStorage.setItem(NOTES_KEY, value);
     } catch {
-      /* abaikan */
+      /* Abaikan */
     }
   };
 
@@ -962,7 +957,7 @@ const NotesView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   );
 };
 
-// ---- menu ----
+// Pengatur seluruh menu.
 
 export const IslandMenu: React.FC<IslandMenuProps> = ({
   view,
@@ -979,7 +974,7 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
   const size = MENU_SIZES[view];
   const back = () => onViewChange("home");
 
-  //geser kiri / kanan (drag mouse) untuk pindah menu
+  // Kontrol geser antar-menu.
   const dragControls = useDragControls();
   const dragged = useRef(false);
   const swipeIndex = SWIPE_ORDER.indexOf(view);
@@ -996,17 +991,17 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
     const fast = Math.abs(dx) > 25 && Math.abs(vx) > SWIPE_SPEED;
     if (!far && !fast) return;
 
-    // geser ke kiri = menu berikutnya
+    // Geser kiri atau kanan untuk berpindah.
     const next = SWIPE_ORDER[swipeIndex + (dx < 0 ? 1 : -1)];
     if (next) onViewChange(next);
   };
 
-  // Esc: kembali, lalu tutup
+  // Tombol Esc untuk kembali atau menutup menu.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (view === "home") {
-        // terkunci selama stopwatch berjalan
+        // Menu tidak bisa ditutup saat stopwatch berjalan.
         if (!stopwatch.isRunning()) onClose();
       } else {
         onViewChange(view === "locate" ? "prayer" : "home");
@@ -1080,7 +1075,7 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
     }
   };
 
-  // klik area kosong di sub-halaman -> kembali (sama seperti tab kembali)
+  // Klik area kosong untuk kembali ke menu utama.
   const onEmptyClick = (e: React.MouseEvent) => {
     if (view === "home") return;
     const target = e.target as HTMLElement;
@@ -1090,7 +1085,7 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
       )
     )
       return;
-    // habis memilih teks: bukan klik kosong
+    // Abaikan klik saat teks sedang dipilih.
     if (window.getSelection()?.toString()) return;
     onViewChange(getMenuBack(view));
   };
@@ -1112,18 +1107,18 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
           dragSnapToOrigin
           onPointerDown={(e) => {
             if (!swipeable || e.button !== 0) return;
-            // kolom ketik: drag dipakai untuk memilih teks
+            // Input tetap bisa digunakan untuk memilih teks.
             if ((e.target as HTMLElement).closest("input, textarea")) return;
             dragControls.start(e);
           }}
           onDragStart={() => window.getSelection()?.removeAllRanges()}
           onDrag={(_, info) => {
-            // geseran kecil tetap dianggap klik
+            // Tandai jika sudah terjadi geseran.
             if (Math.abs(info.offset.x) > 8) dragged.current = true;
           }}
           onDragEnd={onSwipeEnd}
           onClickCapture={(e) => {
-            // setelah geser, jangan ikut menekan tombol
+            // Abaikan klik setelah geseran.
             if (dragged.current) {
               e.stopPropagation();
               e.preventDefault();

@@ -6,7 +6,13 @@
  */
 
 import { useEffect, useState } from "react";
-import { DayResolver, PrayerTimes, calcDay, deviceTz, zonedTime } from "./prayer";
+import {
+  DayResolver,
+  PrayerTimes,
+  calcDay,
+  deviceTz,
+  zonedTime,
+} from "./prayer";
 
 // fajr, sunrise, dhuhr, asr, maghrib, isha
 type Row = [string, string, string, string, string, string];
@@ -46,7 +52,12 @@ const hm = (s: unknown): string => {
   return m ? `${m[1].padStart(2, "0")}:${m[2]}` : "";
 };
 
-async function fetchMonth(y: number, m: number, lat: number, lng: number): Promise<MonthData> {
+async function fetchMonth(
+  y: number,
+  m: number,
+  lat: number,
+  lng: number,
+): Promise<MonthData> {
   const url = `https://api.aladhan.com/v1/calendar/${y}/${m}?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&method=20`;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 10000);
@@ -54,13 +65,16 @@ async function fetchMonth(y: number, m: number, lat: number, lng: number): Promi
     const res = await fetch(url, { signal: ctl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    if (json.code !== 200 || !Array.isArray(json.data)) throw new Error("Respons tidak valid");
+    if (json.code !== 200 || !Array.isArray(json.data))
+      throw new Error("Respons tidak valid");
 
     const days: Record<number, Row> = {};
     let tz = "";
     for (const e of json.data) {
       const t = e.timings ?? {};
-      const row = [t.Fajr, t.Sunrise, t.Dhuhr, t.Asr, t.Maghrib, t.Isha].map(hm);
+      const row = [t.Fajr, t.Sunrise, t.Dhuhr, t.Asr, t.Maghrib, t.Isha].map(
+        hm,
+      );
       const day = parseInt(e.date?.gregorian?.day, 10);
       if (row.some((x) => !x) || !day) continue;
       days[day] = row as Row;
@@ -73,7 +87,12 @@ async function fetchMonth(y: number, m: number, lat: number, lng: number): Promi
   }
 }
 
-function ensureMonth(y: number, m: number, lat: number, lng: number): Promise<boolean> {
+function ensureMonth(
+  y: number,
+  m: number,
+  lat: number,
+  lng: number,
+): Promise<boolean> {
   const k = monthKey(y, m, lat, lng);
   if (memory.has(k)) return Promise.resolve(true);
 
@@ -110,10 +129,19 @@ export function usePrayerSchedule(lat: number, lng: number, now: Date) {
     const base = new Date();
     const months = new Map<string, [number, number]>();
     for (const off of [-1, 0, 1]) {
-      const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + off);
-      months.set(`${d.getFullYear()}-${d.getMonth()}`, [d.getFullYear(), d.getMonth() + 1]);
+      const d = new Date(
+        base.getFullYear(),
+        base.getMonth(),
+        base.getDate() + off,
+      );
+      months.set(`${d.getFullYear()}-${d.getMonth()}`, [
+        d.getFullYear(),
+        d.getMonth() + 1,
+      ]);
     }
-    Promise.all([...months.values()].map(([y, m]) => ensureMonth(y, m, lat, lng))).then((r) => {
+    Promise.all(
+      [...months.values()].map(([y, m]) => ensureMonth(y, m, lat, lng)),
+    ).then((r) => {
       if (!alive) return;
       setFailed(r.some((ok) => !ok));
       bump((v) => v + 1);
@@ -148,6 +176,8 @@ export function usePrayerSchedule(lat: number, lng: number, now: Date) {
     };
   };
 
-  const current = memory.get(monthKey(now.getFullYear(), now.getMonth() + 1, lat, lng));
+  const current = memory.get(
+    monthKey(now.getFullYear(), now.getMonth() + 1, lat, lng),
+  );
   return { resolve, tz: current?.tz ?? deviceTz(), estimate: !current };
 }
