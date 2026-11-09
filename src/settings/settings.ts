@@ -13,6 +13,12 @@ import { listen } from "@tauri-apps/api/event";
 
 export type IslandStyle = "pill" | "notch" | "tab";
 
+// Kondisi island yang ukurannya bisa diatur:
+//   compact : island kecil saat ada aktivitas (musik, timer, file, dll.)
+//   mini    : island paling kecil saat idle / tidak ada aktivitas
+// Ukuran saat expanded tidak bisa diatur.
+export type SizeMode = "compact" | "mini";
+
 export interface AppSettings {
   // Umum
   islandEnabled: boolean;
@@ -24,14 +30,22 @@ export interface AppSettings {
   style: IslandStyle;
   shoulder: number; // lebar bahu pada gaya notch (px)
 
-  // Ukuran island: selisih px dari ukuran bawaan (0 = bawaan)
-  pillWidth: number;
-  pillHeight: number;
+  // Ukuran island saat compact dan mini, per gaya.
+  // Nilainya selisih px dari ukuran bawaan (0 = bawaan).
+  pillCompactWidth: number;
+  pillCompactHeight: number;
+  pillMiniWidth: number;
+  pillMiniHeight: number;
+  notchCompactWidth: number;
+  notchCompactHeight: number;
+  notchMiniWidth: number;
+  notchMiniHeight: number;
+  tabCompactWidth: number;
+  tabCompactHeight: number;
+  tabMiniWidth: number;
+  tabMiniHeight: number;
+
   pillTop: number; // selisih jarak pil dari tepi atas layar
-  notchWidth: number;
-  notchHeight: number;
-  tabWidth: number;
-  tabHeight: number;
 }
 
 export const SHOULDER_MIN = 8;
@@ -45,6 +59,42 @@ export const HEIGHT_MAX = 20;
 export const TOP_MIN = -20;
 export const TOP_MAX = 60;
 
+// Nama kunci lebar / tinggi per gaya dan per kondisi
+export const SIZE_KEYS = {
+  pill: {
+    compact: { w: "pillCompactWidth", h: "pillCompactHeight" },
+    mini: { w: "pillMiniWidth", h: "pillMiniHeight" },
+  },
+  notch: {
+    compact: { w: "notchCompactWidth", h: "notchCompactHeight" },
+    mini: { w: "notchMiniWidth", h: "notchMiniHeight" },
+  },
+  tab: {
+    compact: { w: "tabCompactWidth", h: "tabCompactHeight" },
+    mini: { w: "tabMiniWidth", h: "tabMiniHeight" },
+  },
+} as const;
+
+type SizeKey = (typeof SIZE_KEYS)[IslandStyle][SizeMode][
+  | "w"
+  | "h"];
+
+// Semua selisih ukuran = 0 (ukuran bawaan)
+const DEFAULT_SIZES: Pick<AppSettings, SizeKey> = {
+  pillCompactWidth: 0,
+  pillCompactHeight: 0,
+  pillMiniWidth: 0,
+  pillMiniHeight: 0,
+  notchCompactWidth: 0,
+  notchCompactHeight: 0,
+  notchMiniWidth: 0,
+  notchMiniHeight: 0,
+  tabCompactWidth: 0,
+  tabCompactHeight: 0,
+  tabMiniWidth: 0,
+  tabMiniHeight: 0,
+};
+
 export const DEFAULT_SETTINGS: AppSettings = {
   islandEnabled: false,
   autostart: false,
@@ -52,49 +102,30 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fileSounds: true,
   style: "pill",
   shoulder: 14,
-  pillWidth: 0,
-  pillHeight: 0,
   pillTop: 0,
-  notchWidth: 0,
-  notchHeight: 0,
-  tabWidth: 0,
-  tabHeight: 0,
+  ...DEFAULT_SIZES,
 };
 
 // Pengaturan tampilan saja (untuk tombol "Kembalikan tampilan bawaan")
 export const DEFAULT_APPEARANCE: Pick<
   AppSettings,
-  | "style"
-  | "shoulder"
-  | "pillWidth"
-  | "pillHeight"
-  | "pillTop"
-  | "notchWidth"
-  | "notchHeight"
-  | "tabWidth"
-  | "tabHeight"
+  "style" | "shoulder" | "pillTop" | SizeKey
 > = {
   style: DEFAULT_SETTINGS.style,
   shoulder: DEFAULT_SETTINGS.shoulder,
-  pillWidth: 0,
-  pillHeight: 0,
   pillTop: 0,
-  notchWidth: 0,
-  notchHeight: 0,
-  tabWidth: 0,
-  tabHeight: 0,
+  ...DEFAULT_SIZES,
 };
 
-// Nama kunci lebar / tinggi per gaya
-export const SIZE_KEYS = {
-  pill: { w: "pillWidth", h: "pillHeight" },
-  notch: { w: "notchWidth", h: "notchHeight" },
-  tab: { w: "tabWidth", h: "tabHeight" },
-} as const;
-
-// Selisih lebar / tinggi untuk sebuah gaya (default: gaya aktif)
-export function sizeOf(s: AppSettings, style: IslandStyle = s.style) {
-  return { w: s[SIZE_KEYS[style].w], h: s[SIZE_KEYS[style].h] };
+// Selisih lebar / tinggi untuk sebuah gaya dan kondisi
+// (default: gaya aktif, kondisi compact)
+export function sizeOf(
+  s: AppSettings,
+  style: IslandStyle = s.style,
+  mode: SizeMode = "compact",
+) {
+  const keys = SIZE_KEYS[style][mode];
+  return { w: s[keys.w], h: s[keys.h] };
 }
 
 export const STYLE_OPTIONS: { id: IslandStyle; label: string; desc: string }[] = [

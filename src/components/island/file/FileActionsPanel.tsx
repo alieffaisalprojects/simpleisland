@@ -50,7 +50,7 @@ const HOVER_HINT: Record<string, string> = {
   copy: "+ Copy",
   cut: "Move",
   rename: "Ganti nama",
-  props: "Lihat properti",
+  props: "Properti",
   img_rmbg: "Hapus latar",
   pdf_shrink: "Perkecil PDF",
 };

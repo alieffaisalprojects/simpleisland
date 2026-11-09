@@ -185,7 +185,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     (kind === "music" && pausedIdle && !lyricsMode);
 
   // ukuran dari Pengaturan (selisih dari ukuran bawaan, sesuai gaya aktif)
-  const adj = sizeOf(settings);
+  // compact dan mini punya pengaturan sendiri; expanded tidak ikut diubah
+  const adj = sizeOf(settings, settings.style, isMini ? "mini" : "compact");
   const compactH = Math.max(20, COMPACT_HEIGHT + adj.h);
   const compactWidth = Math.max(
     36,
@@ -309,12 +310,16 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   const prevExpanded = useRef(expanded);
 
+  // selisih tinggi terbesar antara compact dan mini (untuk tinggi window)
+  const adjCompactH = sizeOf(settings, settings.style, "compact").h;
+  const adjMiniH = sizeOf(settings, settings.style, "mini").h;
+  const windowAdjH = Math.max(0, adjCompactH, adjMiniH);
+
   // tinggi window
   useEffect(() => {
     // tambahan tinggi window saat pil diturunkan / dipertinggi
     const extra =
-      Math.max(0, islandTop - ISLAND_TOP) +
-      (expanded ? 0 : Math.max(0, adj.h));
+      Math.max(0, islandTop - ISLAND_TOP) + (expanded ? 0 : windowAdjH);
 
     const targetHeight =
       (expanded ? expandedHeight + 24 : COMPACT_WINDOW_HEIGHT) + extra;
@@ -334,7 +339,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     }
 
     void apply();
-  }, [expanded, expandedHeight, islandTop, adj.h]);
+  }, [expanded, expandedHeight, islandTop, windowAdjH]);
 
   // mouse keluar dari jendela -> sembunyikan tab
   useEffect(() => {

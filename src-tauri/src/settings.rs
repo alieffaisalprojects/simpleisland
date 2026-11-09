@@ -40,6 +40,14 @@ const WIDTH_RANGE: (i32, i32) = (-30, 60);
 const HEIGHT_RANGE: (i32, i32) = (-8, 20);
 const TOP_RANGE: (i32, i32) = (-20, 60);
 
+fn clamp_width(v: i32) -> i32 {
+    v.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1)
+}
+
+fn clamp_height(v: i32) -> i32 {
+    v.clamp(HEIGHT_RANGE.0, HEIGHT_RANGE.1)
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -54,15 +62,23 @@ pub struct Settings {
     // Lebar "bahu" kiri-kanan pada gaya notch (px)
     pub shoulder: u32,
 
-    // Ukuran island: selisih px dari ukuran bawaan (0 = bawaan)
-    pub pill_width: i32,
-    pub pill_height: i32,
+    // Ukuran island saat compact (ada aktivitas) dan mini (idle), per gaya.
+    // Selisih px dari ukuran bawaan (0 = bawaan). Ukuran expanded tidak diatur.
+    pub pill_compact_width: i32,
+    pub pill_compact_height: i32,
+    pub pill_mini_width: i32,
+    pub pill_mini_height: i32,
+    pub notch_compact_width: i32,
+    pub notch_compact_height: i32,
+    pub notch_mini_width: i32,
+    pub notch_mini_height: i32,
+    pub tab_compact_width: i32,
+    pub tab_compact_height: i32,
+    pub tab_mini_width: i32,
+    pub tab_mini_height: i32,
+
     // Jarak pil dari tepi atas layar (selisih dari jarak bawaan)
     pub pill_top: i32,
-    pub notch_width: i32,
-    pub notch_height: i32,
-    pub tab_width: i32,
-    pub tab_height: i32,
 }
 
 impl Default for Settings {
@@ -74,13 +90,19 @@ impl Default for Settings {
             file_sounds: true,
             style: "pill".to_string(),
             shoulder: 14,
-            pill_width: 0,
-            pill_height: 0,
+            pill_compact_width: 0,
+            pill_compact_height: 0,
+            pill_mini_width: 0,
+            pill_mini_height: 0,
+            notch_compact_width: 0,
+            notch_compact_height: 0,
+            notch_mini_width: 0,
+            notch_mini_height: 0,
+            tab_compact_width: 0,
+            tab_compact_height: 0,
+            tab_mini_width: 0,
+            tab_mini_height: 0,
             pill_top: 0,
-            notch_width: 0,
-            notch_height: 0,
-            tab_width: 0,
-            tab_height: 0,
         }
     }
 }
@@ -93,13 +115,20 @@ impl Settings {
 
         self.shoulder = self.shoulder.clamp(8, 24);
 
-        self.pill_width = self.pill_width.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1);
-        self.pill_height = self.pill_height.clamp(HEIGHT_RANGE.0, HEIGHT_RANGE.1);
+        self.pill_compact_width = clamp_width(self.pill_compact_width);
+        self.pill_compact_height = clamp_height(self.pill_compact_height);
+        self.pill_mini_width = clamp_width(self.pill_mini_width);
+        self.pill_mini_height = clamp_height(self.pill_mini_height);
+        self.notch_compact_width = clamp_width(self.notch_compact_width);
+        self.notch_compact_height = clamp_height(self.notch_compact_height);
+        self.notch_mini_width = clamp_width(self.notch_mini_width);
+        self.notch_mini_height = clamp_height(self.notch_mini_height);
+        self.tab_compact_width = clamp_width(self.tab_compact_width);
+        self.tab_compact_height = clamp_height(self.tab_compact_height);
+        self.tab_mini_width = clamp_width(self.tab_mini_width);
+        self.tab_mini_height = clamp_height(self.tab_mini_height);
+
         self.pill_top = self.pill_top.clamp(TOP_RANGE.0, TOP_RANGE.1);
-        self.notch_width = self.notch_width.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1);
-        self.notch_height = self.notch_height.clamp(HEIGHT_RANGE.0, HEIGHT_RANGE.1);
-        self.tab_width = self.tab_width.clamp(WIDTH_RANGE.0, WIDTH_RANGE.1);
-        self.tab_height = self.tab_height.clamp(HEIGHT_RANGE.0, HEIGHT_RANGE.1);
         self
     }
 }
@@ -117,10 +146,39 @@ fn config_path(app: &AppHandle) -> Option<PathBuf> {
         .map(|dir| dir.join("settings.json"))
 }
 
+// Versi lama menyimpan satu ukuran per gaya (pillWidth, notchHeight, ...) yang berlaku
+// untuk compact dan mini sekaligus. Salin nilainya ke kedua kondisi supaya tampilan
+// pengguna lama tidak berubah setelah update.
+fn migrate_sizes(value: &mut serde_json::Value) {
+    const OLD_KEYS: [(&str, [&str; 2]); 6] = [
+        ("pillWidth", ["pillCompactWidth", "pillMiniWidth"]),
+        ("pillHeight", ["pillCompactHeight", "pillMiniHeight"]),
+        ("notchWidth", ["notchCompactWidth", "notchMiniWidth"]),
+        ("notchHeight", ["notchCompactHeight", "notchMiniHeight"]),
+        ("tabWidth", ["tabCompactWidth", "tabMiniWidth"]),
+        ("tabHeight", ["tabCompactHeight", "tabMiniHeight"]),
+    ];
+
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+
+    for (old, news) in OLD_KEYS {
+        if let Some(v) = map.remove(old) {
+            for new in news {
+                map.entry(new.to_string()).or_insert_with(|| v.clone());
+            }
+        }
+    }
+}
+
 fn read_file(app: &AppHandle) -> Option<Settings> {
     let text = fs::read_to_string(config_path(app)?).ok()?;
 
-    serde_json::from_str::<Settings>(&text)
+    let mut value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    migrate_sizes(&mut value);
+
+    serde_json::from_value::<Settings>(value)
         .ok()
         .map(Settings::sanitized)
 }

@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   AlertCircle,
   FileUp,
+  Info,
   LocateFixed,
   LogOut,
   Palette,
@@ -33,7 +34,7 @@ import {
   sizeOf,
   useSettings,
 } from "./settings";
-import type { AppSettings, IslandStyle } from "./settings";
+import type { AppSettings, IslandStyle, SizeMode } from "./settings";
 
 type Tab = "general" | "appearance";
 
@@ -58,7 +59,7 @@ const Toggle: React.FC<{
     disabled={disabled}
     onClick={() => onChange(!checked)}
     className={`relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/70 ${
-      checked ? "bg-sky-400" : "bg-white/20"
+      checked ? "bg-[#34C759]" : "bg-[#636366]"
     } ${disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
   >
     <motion.span
@@ -96,16 +97,16 @@ const Row: React.FC<{
     <div
       className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_9px_rgba(0,0,0,0.18)] ${
         Icon === Power
-          ? "bg-[#919191]"
+          ? "bg-[#1900ff]"
           : Icon === Rocket
-            ? "bg-[#28a6ee]"
+            ? "bg-[#ff1111]"
             : Icon === FileUp
-              ? "bg-[#daab13]"
+              ? "bg-[#34a5c7]"
               : Icon === Volume2
-                ? "bg-[#1b9e1b]"
+                ? "bg-[#34C759]"
                 : Icon === LocateFixed
                   ? "bg-[#919191]"
-                  : "bg-[#ce2828]"
+                  : "bg-[#919191]"
       }`}
     >
       <Icon
@@ -140,7 +141,7 @@ const ActionButton: React.FC<{
     onClick={onClick}
     className={`h-[32px] shrink-0 rounded-[10px] px-3.5 text-[12.5px] font-medium transition active:scale-95 ${
       tone === "danger"
-        ? "bg-red-500/[0.16] text-red-200 hover:bg-red-500/25"
+        ? "bg-[#ce2828] text-white hover:bg-[#9b0c0c]"
         : "bg-white/10 text-white/90 hover:bg-white/[0.17]"
     }`}
   >
@@ -152,13 +153,14 @@ const ActionButton: React.FC<{
 
 const SliderRow: React.FC<{
   title: string;
-  desc: string;
+  desc?: string;
   value: number;
   min: number;
   max: number;
   display: (value: number) => string;
   onCommit: (value: number) => void;
-}> = ({ title, desc, value, min, max, display, onCommit }) => {
+  dense?: boolean; // versi rapat untuk panel sempit
+}> = ({ title, desc, value, min, max, display, onCommit, dense }) => {
   const [draft, setDraft] = useState(value);
 
   useEffect(() => setDraft(value), [value]);
@@ -168,13 +170,19 @@ const SliderRow: React.FC<{
   };
 
   return (
-    <div className="px-4 py-3.5">
-      <div className="mb-2 flex items-center justify-between">
-        <div>
-          <div className="text-[13.5px] font-medium">{title}</div>
-          <div className="mt-[2px] text-[12px] text-white/50">{desc}</div>
+    <div className={dense ? "py-2.5" : "px-4 py-3.5"}>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div
+            className={`font-medium ${dense ? "text-[13px]" : "text-[13.5px]"}`}
+          >
+            {title}
+          </div>
+          {desc && (
+            <div className="mt-[2px] text-[12px] text-white/50">{desc}</div>
+          )}
         </div>
-        <span className="rounded-[8px] bg-white/10 px-2 py-[3px] text-[12px] tabular-nums text-white/80">
+        <span className="shrink-0 rounded-[8px] bg-white/10 px-2 py-[3px] text-[12px] tabular-nums text-white/80">
           {display(draft)}
         </span>
       </div>
@@ -202,16 +210,23 @@ const fmtOffset = (v: number) =>
 
 // pratinjau bentuk island
 
+// ukuran dasar pratinjau
+const PREVIEW_BASE: Record<SizeMode, { w: number; h: number }> = {
+  compact: { w: 108, h: 32 },
+  mini: { w: 84, h: 26 },
+};
+
 const ShapePreview: React.FC<{
   style: IslandStyle;
   shoulder: number;
   dw?: number;
   dh?: number;
   dtop?: number;
-}> = ({ style, shoulder, dw = 0, dh = 0, dtop = 0 }) => {
+  mode?: SizeMode;
+}> = ({ style, shoulder, dw = 0, dh = 0, dtop = 0, mode = "compact" }) => {
   const flush = style !== "pill";
-  const w = Math.round(108 + dw * 0.5);
-  const h = Math.round(32 + dh * 0.5);
+  const w = Math.max(40, Math.round(PREVIEW_BASE[mode].w + dw * 0.5));
+  const h = Math.max(16, Math.round(PREVIEW_BASE[mode].h + dh * 0.5));
   const top = flush ? 0 : Math.max(0, Math.round(10 + dtop * 0.4));
   const r = Math.min(16, h / 2);
 
@@ -248,6 +263,89 @@ const ShapePreview: React.FC<{
     </div>
   );
 };
+
+// panel ukuran satu kondisi (compact / mini)
+
+const SizeGroup: React.FC<{
+  title: string;
+  desc: string;
+  mode: SizeMode;
+  style: IslandStyle;
+  shoulder: number;
+  top: number;
+  width: number;
+  height: number;
+  onWidth: (value: number) => void;
+  onHeight: (value: number) => void;
+  onReset: () => void;
+}> = ({
+  title,
+  desc,
+  mode,
+  style,
+  shoulder,
+  top,
+  width,
+  height,
+  onWidth,
+  onHeight,
+  onReset,
+}) => (
+  <div className="flex min-w-0 flex-col gap-3 p-4">
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[13.5px] font-semibold tracking-[-0.01em]">
+          {title}
+        </h3>
+
+        <button
+          type="button"
+          disabled={width === 0 && height === 0}
+          onClick={onReset}
+          className="flex h-[24px] items-center gap-1.5 rounded-[8px] px-2 text-[11.5px] font-medium text-white/60 transition hover:bg-white/10 hover:text-white/90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          <RotateCcw size={12} />
+          Reset
+        </button>
+      </div>
+
+      <p className="mt-[3px] min-h-[34px] text-[11.5px] leading-[1.45] text-white/50">
+        {desc}
+      </p>
+    </div>
+
+    <ShapePreview
+      style={style}
+      shoulder={shoulder}
+      dw={width}
+      dh={height}
+      dtop={top}
+      mode={mode}
+    />
+
+    <div className="divide-y divide-white/[0.07]">
+      <SliderRow
+        dense
+        title="Lebar"
+        value={width}
+        min={WIDTH_MIN}
+        max={WIDTH_MAX}
+        display={fmtOffset}
+        onCommit={onWidth}
+      />
+
+      <SliderRow
+        dense
+        title="Tinggi"
+        value={height}
+        min={HEIGHT_MIN}
+        max={HEIGHT_MAX}
+        display={fmtOffset}
+        onCommit={onHeight}
+      />
+    </div>
+  </div>
+);
 
 // halaman umum
 
@@ -312,7 +410,7 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
         <Row
           Icon={FileUp}
           title="Menu Serbaguna"
-          desc="Tampilkan menu aksi (konversi, ZIP, salin, dll.) saat file diseret ke island."
+          desc="Menu aksi (konversi, ZIP, salin, dll.) saat file diseret ke island."
         >
           <Toggle
             label="Seret dan lepas file"
@@ -375,9 +473,12 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
     Object.keys(DEFAULT_APPEARANCE) as (keyof typeof DEFAULT_APPEARANCE)[]
   ).every((k) => settings[k] === DEFAULT_APPEARANCE[k]);
 
-  // ukuran gaya yang sedang dipilih
+  // ukuran gaya yang sedang dipilih (compact dan mini terpisah)
   const keys = SIZE_KEYS[settings.style];
-  const size = sizeOf(settings);
+  const compact = sizeOf(settings, settings.style, "compact");
+  const mini = sizeOf(settings, settings.style, "mini");
+  const setSize = (patch: Record<string, number>) =>
+    commit(patch as Partial<AppSettings>);
   const styleLabel =
     STYLE_OPTIONS.find((o) => o.id === settings.style)?.label ?? "";
   const topMin = Math.max(TOP_MIN, -ISLAND_TOP);
@@ -388,7 +489,7 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
         <div className="grid grid-cols-3 gap-3 p-3">
           {STYLE_OPTIONS.map((opt) => {
             const selected = settings.style === opt.id;
-            const sz = sizeOf(settings, opt.id);
+            const sz = sizeOf(settings, opt.id, "compact");
 
             return (
               <button
@@ -469,25 +570,35 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
       </AnimatePresence>
 
       <Card title={`Ukuran ${styleLabel}`}>
-        <SliderRow
-          title="Lebar"
-          desc="Lebar island saat kecil."
-          value={size.w}
-          min={WIDTH_MIN}
-          max={WIDTH_MAX}
-          display={fmtOffset}
-          onCommit={(v) => commit({ [keys.w]: v } as Partial<AppSettings>)}
-        />
+        <div className="grid grid-cols-2 divide-x divide-white/[0.07]">
+          <SizeGroup
+            title="Compact"
+            desc="Saat ada musik, timer, atau aktivitas lain."
+            mode="compact"
+            style={settings.style}
+            shoulder={draft}
+            top={settings.style === "pill" ? settings.pillTop : 0}
+            width={compact.w}
+            height={compact.h}
+            onWidth={(v) => setSize({ [keys.compact.w]: v })}
+            onHeight={(v) => setSize({ [keys.compact.h]: v })}
+            onReset={() => setSize({ [keys.compact.w]: 0, [keys.compact.h]: 0 })}
+          />
 
-        <SliderRow
-          title="Tinggi"
-          desc="Tinggi island saat kecil."
-          value={size.h}
-          min={HEIGHT_MIN}
-          max={HEIGHT_MAX}
-          display={fmtOffset}
-          onCommit={(v) => commit({ [keys.h]: v } as Partial<AppSettings>)}
-        />
+          <SizeGroup
+            title="Mini"
+            desc="Saat idle atau tidak ada aktivitas."
+            mode="mini"
+            style={settings.style}
+            shoulder={draft}
+            top={settings.style === "pill" ? settings.pillTop : 0}
+            width={mini.w}
+            height={mini.h}
+            onWidth={(v) => setSize({ [keys.mini.w]: v })}
+            onHeight={(v) => setSize({ [keys.mini.h]: v })}
+            onReset={() => setSize({ [keys.mini.w]: 0, [keys.mini.h]: 0 })}
+          />
+        </div>
 
         {settings.style === "pill" && (
           <SliderRow
@@ -500,6 +611,11 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
             onCommit={(v) => commit({ pillTop: v })}
           />
         )}
+
+        <div className="flex items-center gap-2.5 px-4 py-3 text-[11.5px] text-white/45">
+          <Info size={14} className="shrink-0" />
+          Ukuran saat diperluas (expanded) tidak ikut berubah.
+        </div>
       </Card>
 
       <div className="flex items-center justify-between gap-4 px-1">
@@ -511,7 +627,7 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
           className="flex h-[32px] shrink-0 items-center gap-2 rounded-[10px] bg-white/10 px-3.5 text-[12.5px] font-medium text-white/90 transition hover:bg-white/[0.17] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <RotateCcw size={14} />
-          Kembalikan tampilan bawaan
+          Kembalikan semua ke tampilan bawaan
         </button>
       </div>
     </>
