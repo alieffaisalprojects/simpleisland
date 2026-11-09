@@ -34,23 +34,27 @@ export const HIT_PAD = 4;
 // bingkai pil musik
 export const SEC_FRAME = 4;
 
-// ---- menu klik kanan ----
+// ---- menu (klik kiri saat idle, klik kanan kapan saja) ----
 export type MenuView =
   | "home"
   | "prayer"
   | "locate"
   | "calendar"
   | "stopwatch"
-  | "notes";
+  | "notes"
+  | "wifi"
+  | "bluetooth";
 
 // ukuran island untuk tiap halaman menu (lebar maksimal 394 = player musik)
 export const MENU_SIZES: Record<MenuView, { width: number; height: number }> = {
-  home: { width: 340, height: 116 },
+  home: { width: 372, height: 194 },
   prayer: { width: 394, height: 156 },
   locate: { width: 394, height: 196 },
   calendar: { width: 340, height: 262 },
   stopwatch: { width: 340, height: 118 },
   notes: { width: 340, height: 170 },
+  wifi: { width: 372, height: 290 },
+  bluetooth: { width: 372, height: 290 },
 };
 
 export const SPRING_EXPAND = {
@@ -110,6 +114,30 @@ export const HUD_PAD = 7;
 export const BUMP_H = 38;
 export const BUMP_OUT = 6; // keluar
 export const BUMP_IN = 10; // masuk
+
+// tab kembali: benjolan di kiri atas island saat menu dibuka
+export const TAB_OUT = 32; // bagian yang keluar dari island
+export const TAB_IN = 16; // bagian yang masuk (menyatu dengan island)
+export const TAB_W = TAB_OUT + TAB_IN;
+export const TAB_H = 40;
+export const TAB_TOP = 10; // jarak dari atas island
+export const TAB_ENTER = {
+  type: "spring",
+  stiffness: 420,
+  damping: 30,
+  mass: 0.7,
+} as const;
+// masuk kembali: tween, langsung bergerak tanpa memantul
+export const TAB_EXIT = {
+  type: "tween",
+  duration: 0.2,
+  ease: "easeOut",
+} as const;
+
+// tujuan tombol kembali (sama dengan Esc)
+export function getMenuBack(view: MenuView): MenuView {
+  return view === "locate" ? "prayer" : "home";
+}
 
 // HUD keluar
 const HUD_ENTER = {

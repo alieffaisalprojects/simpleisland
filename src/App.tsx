@@ -6,6 +6,7 @@ import { GooeyFilter } from "./components/island/GooeyFilter";
 import { useFileDragDrop } from "./hooks/useFileDragDrop";
 import { useClockTimer } from "./hooks/useClockTimer";
 import { useLyrics } from "./hooks/useLyrics";
+import { useChargerSound } from "./hooks/useChargerSound";
 import { ActiveWidget, SpotifyTrack } from "./types";
 
 type MediaPayload = {
@@ -50,6 +51,7 @@ export function App() {
   const { droppedFile, clearFile } = useFileDragDrop();
   const clockTimer = useClockTimer(); // timer dari aplikasi Clock Windows
   const lyrics = useLyrics(track);
+  useChargerSound(); // suara saat charger dicolok
 
   const anchorRef = useRef<PositionAnchor>({
     key: "",

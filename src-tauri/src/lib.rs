@@ -2,6 +2,7 @@ mod island_native; // Timer Clock Windows dan HTTP request
 mod file_actions; // Aksi file untuk drag & drop ke island
 mod file_convert; // Konversi ICO / PDF / Word + folder Explorer aktif
 mod settings; // Halaman Pengaturan (Umum + Tampilan)
+mod system_status; // Baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat
 
 use base64::{engine::general_purpose, Engine as _};
 use std::sync::Mutex;
@@ -1135,7 +1136,17 @@ pub fn run() {
             settings::settings_get,
             settings::settings_save,
             settings::settings_recenter,
-            settings::settings_quit
+            settings::settings_quit,
+            system_status::system_status,
+            system_status::power_status,
+            system_status::system_radios,
+            system_status::system_radio_set,
+            system_status::system_airplane_set,
+            system_status::wifi_list,
+            system_status::wifi_connect,
+            system_status::wifi_disconnect,
+            system_status::bluetooth_list,
+            system_status::system_open_page
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

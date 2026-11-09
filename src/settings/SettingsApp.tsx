@@ -87,15 +87,15 @@ const Row: React.FC<{
     <div
       className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_9px_rgba(0,0,0,0.18)] ${
         Icon === Power
-          ? "bg-[#007AFF]"
+          ? "bg-[#919191]"
           : Icon === Rocket
-            ? "bg-[#44c038]"
+            ? "bg-[#28a6ee]"
             : Icon === FileUp
-              ? "bg-[#FF9500]"
+              ? "bg-[#daab13]"
               : Icon === Volume2
-                ? "bg-[#ce2828]"
+                ? "bg-[#1b9e1b]"
                 : Icon === LocateFixed
-                  ? "bg-[#007AFF]"
+                  ? "bg-[#919191]"
                   : "bg-[#ce2828]"
       }`}
     >
@@ -209,11 +209,7 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
 
           <div className="min-w-0 flex-1">
             <div className="text-[14px] font-semibold">
-              Simple Island belum aktif
-            </div>
-            <div className="mt-[2px] text-[12.5px] leading-snug text-white/60">
-              Aplikasi tidak langsung menampilkan island setelah diinstal.
-              Aktifkan saat kamu siap memakainya.
+              Aktifkan Simple Island
             </div>
           </div>
 
@@ -260,8 +256,8 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
 
         <Row
           Icon={Volume2}
-          title="Efek Suara"
-          desc="Bunyi saat memilih, melepas, dan menyelesaikan aksi file."
+          title="Suara"
+          desc="Efek suara saat memilih, melepas, dan menyelesaikan aksi file."
         >
           <Toggle
             label="Suara efek file"
@@ -469,7 +465,7 @@ export const SettingsApp: React.FC = () => {
         <div className="mt-auto px-2 pb-2">
           <div className="mb-3 h-px w-full bg-white/[0.07]" />
 
-          <div className="text-[9.5px] font-semibold uppercase leading-none tracking-[0.18em] text-white/35">
+          <div className="text-[12px] font-semibold leading-none  text-white/35">
             Developed by
           </div>
 

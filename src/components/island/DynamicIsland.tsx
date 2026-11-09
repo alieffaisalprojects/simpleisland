@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, type MotionStyle } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { File, Music } from "lucide-react";
+import { ChevronLeft, File, Music } from "lucide-react";
 import {
   ActiveWidget,
   ClockTimer,
@@ -41,6 +41,13 @@ import {
   BUMP_H,
   BUMP_OUT,
   BUMP_IN,
+  TAB_OUT,
+  TAB_W,
+  TAB_H,
+  TAB_TOP,
+  TAB_ENTER,
+  TAB_EXIT,
+  getMenuBack,
   HudExit,
   hudShapeVariants,
   hudContentVariants,
@@ -116,6 +123,25 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const menuBusyRef = useRef(false); // menu menunggu izin lokasi
   const secHit = useRef<number[] | null>(null); // area klik pil kedua
 
+  // tab kembali (menu)
+  const tabRef = useRef<HTMLButtonElement>(null);
+  const [menuHover, setMenuHover] = useState(false); // mouse di island / tab
+  const [tabTail, setTabTail] = useState(false); // gooey tetap nyala saat tab keluar
+
+  const hoverIn = () => setMenuHover(true);
+
+  // keluar dari island/tab: sembunyikan langsung,
+  // kecuali pindah antara island dan tab (keduanya menempel)
+  const hoverOut = (e: React.PointerEvent) => {
+    const to = e.relatedTarget;
+    if (
+      to instanceof Node &&
+      (islandRef.current?.contains(to) || tabRef.current?.contains(to))
+    )
+      return;
+    setMenuHover(false);
+  };
+
   const hasMedia = Boolean(track.title && track.title !== "Tidak ada media");
   const timerOn = clockTimer.active;
 
@@ -141,6 +167,14 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     isMusic,
   );
   const kind: IslandKind = menuOpen ? "menu" : baseKind;
+
+  // tab kembali: hanya gaya notch / tab (bukan pill), di sub-halaman menu,
+  // dan hanya saat mouse di dalam
+  const menuTabOn =
+    settings.style !== "pill" &&
+    kind === "menu" &&
+    menuView !== "home" &&
+    menuHover;
   const secondary = getSecondary(kind, timerOn, hasMedia);
 
   const showSecondary = Boolean(secondary) && !expanded && !forceMini;
@@ -221,7 +255,15 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   // ---- menu klik kanan ----
 
-  // klik kanan pada island: buka menu, klik kanan lagi: tutup
+  // buka menu ke layar utama
+  const openMenu = () => {
+    if (lockedRef.current || forceMini) return;
+    setExpanded(false);
+    setMenuView("home");
+    setMenuOpen(true);
+  };
+
+  // klik kanan pada island: buka menu (kapan saja), klik kanan lagi: tutup
   const handleContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -231,9 +273,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
       setMenuOpen(false);
       return;
     }
-    setExpanded(false);
-    setMenuView("home");
-    setMenuOpen(true);
+    openMenu();
   };
 
   // ---- Volume ----
@@ -281,13 +321,33 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     void apply();
   }, [expanded, expandedHeight]);
 
+  // mouse keluar dari jendela -> sembunyikan tab
+  useEffect(() => {
+    const onOut = (event: MouseEvent) => {
+      if (!event.relatedTarget) setMenuHover(false);
+    };
+    document.addEventListener("mouseout", onOut);
+    return () => document.removeEventListener("mouseout", onOut);
+  }, []);
+
+  // gooey tetap nyala sampai animasi tab keluar selesai
+  useEffect(() => {
+    if (menuTabOn) {
+      setTabTail(true);
+      return;
+    }
+    const t = window.setTimeout(() => setTabTail(false), 500);
+    return () => window.clearTimeout(t);
+  }, [menuTabOn]);
+
   // klik luar -> tutup
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
       if (lockedRef.current) return;
       if (
         islandRef.current &&
-        !islandRef.current.contains(event.target as Node)
+        !islandRef.current.contains(event.target as Node) &&
+        !tabRef.current?.contains(event.target as Node)
       ) {
         setExpanded(false);
         setMenuOpen(false);
@@ -368,6 +428,18 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
       }
 
       if (secHit.current) rects.push(secHit.current);
+      const tb = tabRef.current;
+      if (tb) {
+        const r = tb.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          rects.push([
+            Math.round(r.left) - HIT_PAD,
+            Math.round(r.top) - HIT_PAD,
+            Math.round(r.width) + HIT_PAD * 2 + 4,
+            Math.round(r.height) + HIT_PAD * 2,
+          ]);
+        }
+      }
 
       const key = JSON.stringify(rects);
       if (key !== last) {
@@ -444,7 +516,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     return () => window.clearTimeout(t);
   }, [showSecondary]);
 
-  const gooOn = showSecondary || gooTail || volumeWindow;
+  const gooOn =
+    showSecondary || gooTail || volumeWindow || menuTabOn || tabTail;
 
   // ---- pil kedua ----
 
@@ -474,6 +547,29 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     height: COMPACT_HEIGHT,
     borderRadius: COMPACT_HEIGHT / 2,
     transformOrigin: "left center",
+  };
+
+  // ---- tab kembali ----
+
+  // posisi dihitung relatif terhadap tepi kiri island yang sedang beranimasi,
+  // supaya tab ikut menyempit/melebar bersama island
+  // (tab hanya tampil pada gaya notch / tab, jadi island selalu menempel di atas)
+  const tabTop = Math.max(TAB_TOP, shoulder + 6);
+
+  const tabFrameStyle: MotionStyle = {
+    top: islandTop,
+    height: 0,
+    x: "-50%",
+    transformOrigin: "top center",
+  };
+
+  const tabShapeStyle: React.CSSProperties = {
+    top: tabTop,
+    left: -TAB_OUT,
+    width: TAB_W,
+    height: TAB_H,
+    borderRadius: TAB_H / 2,
+    transformOrigin: `${TAB_OUT}px 50%`,
   };
 
   // ---- HUD volume ----
@@ -786,6 +882,28 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           />
         )}
 
+        {/* tab kembali (menyatu dengan island lewat gooey) */}
+        <motion.div
+          className="pointer-events-none absolute left-1/2"
+          style={tabFrameStyle}
+          initial={false}
+          animate={{ width: anim.width, scale: anim.scale }}
+          transition={spring}
+        >
+          <AnimatePresence>
+            {menuTabOn && (
+              <motion.div
+                key="menu-tab-shape"
+                className="absolute bg-[#050506]"
+                style={tabShapeStyle}
+                initial={{ scaleX: 0 }}
+                animate={{ scaleX: 1, transition: TAB_ENTER }}
+                exit={{ scaleX: 0, transition: TAB_EXIT }}
+              />
+            )}
+          </AnimatePresence>
+        </motion.div>
+
         {/* HUD volume */}
         <AnimatePresence custom={hudExit}>
           {showVolume && (
@@ -850,14 +968,24 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         animate={anim}
         transition={spring}
         onClick={() => {
-          if (kind === "idle" || kind === "paste" || kind === "menu") return;
+          if (kind === "paste" || kind === "menu") return;
           if (lockedRef.current) return; // terkunci
+          // tidak ada aktivitas lain: klik kiri langsung membuka menu
+          if (kind === "idle") {
+            openMenu();
+            return;
+          }
           setExpanded((v) => !v);
         }}
         onContextMenu={handleContextMenu}
         onPointerDown={() => setPressed(true)}
         onPointerUp={() => setPressed(false)}
-        onPointerLeave={() => setPressed(false)}
+        onPointerEnter={hoverIn}
+        onPointerMove={hoverIn}
+        onPointerLeave={(e) => {
+          setPressed(false);
+          hoverOut(e);
+        }}
         onPointerCancel={() => setPressed(false)}
         className="pointer-events-auto absolute left-1/2 z-50 cursor-pointer overflow-hidden text-white"
         style={{
@@ -868,6 +996,48 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
       >
         <AnimatePresence mode="wait" initial={false}>
           {renderMainContent()}
+        </AnimatePresence>
+      </motion.div>
+
+      {/* tombol kembali menu: di luar island, menempel di kiri atas */}
+      <motion.div
+        className="pointer-events-none absolute left-1/2 z-50"
+        style={tabFrameStyle}
+        initial={false}
+        animate={{ width: anim.width, scale: anim.scale }}
+        transition={spring}
+      >
+        <AnimatePresence>
+          {menuTabOn && (
+            <motion.button
+              key="menu-tab"
+              ref={tabRef}
+              type="button"
+              aria-label="Kembali"
+              className="pointer-events-auto absolute flex cursor-pointer items-center justify-center rounded-l-[20px] text-white outline-none transition-colors hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/70"
+              style={{
+                top: tabTop,
+                left: -TAB_OUT,
+                width: TAB_OUT,
+                height: TAB_H,
+              }}
+              initial={{ x: TAB_OUT, opacity: 0 }}
+              animate={{ x: 0, opacity: 1, transition: TAB_ENTER }}
+              exit={{
+                x: TAB_OUT,
+                opacity: 0,
+                transition: { ...TAB_EXIT, opacity: { duration: 0.12 } },
+              }}
+              onPointerEnter={hoverIn}
+              onPointerLeave={hoverOut}
+              onClick={() => {
+                setMenuHover(false);
+                setMenuView(getMenuBack(menuView));
+              }}
+            >
+              <ChevronLeft size={16} />
+            </motion.button>
+          )}
         </AnimatePresence>
       </motion.div>
 

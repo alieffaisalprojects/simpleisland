@@ -1,7 +1,7 @@
 /**
  * File: IslandMenu.tsx
- * Kegunaan: Menu island yang terbuka saat klik kanan.
- * Isi: Salat (lokasi real-time), Kalender, Stopwatch, Catatan.
+ * Kegunaan: Menu island (baris status + menu).
+ * Isi: Salat (lokasi real-time), Kalender, Stopwatch, Catatan, Wi-Fi, Bluetooth, Mode pesawat.
  * Tombol kembali di setiap halaman mengarah ke layar utama menu.
  */
 
@@ -21,11 +21,19 @@ import {
   RotateCcw,
   Search,
 } from "lucide-react";
-import { MENU_SIZES, MenuView, swapFade } from "../dynamic_island/constants";
+import {
+  MENU_SIZES,
+  MenuView,
+  getMenuBack,
+  swapFade,
+} from "../dynamic_island/constants";
 import shalatIcon from "../../../assets/styles/icons/sajadah.svg";
 import kalenderIcon from "../../../assets/styles/icons/kalender.svg";
 import stopwatchIcon from "../../../assets/styles/icons/stopwatch.svg";
 import catatanIcon from "../../../assets/styles/icons/catatan.svg";
+import wifiIcon from "../../../assets/styles/menu_icons/wifi.svg";
+import bluetoothIcon from "../../../assets/styles/menu_icons/bluetooth.svg";
+import airplaneIcon from "../../../assets/styles/menu_icons/airplane.svg";
 import chooseSound from "../../../assets/sounds/choose.wav";
 import dropSound from "../../../assets/sounds/drop.wav";
 import {
@@ -40,6 +48,9 @@ import {
 import { GeoLocation, Place, searchPlaces, useLocation } from "./useLocation";
 import { usePrayerSchedule } from "./usePrayerSchedule";
 import { stopwatch, useStopwatchRunning } from "./stopwatchStore";
+import { SystemInfo, useSystemStatus } from "./useSystemStatus";
+import { SystemStatusBar } from "./SystemStatusBar";
+import { BluetoothView, WifiView } from "./NetworkViews";
 
 interface IslandMenuProps {
   view: MenuView;
@@ -80,7 +91,14 @@ function countdown(ms: number): string {
 }
 
 //urutan menu saat digeser kiri / kanan
-const SWIPE_ORDER: MenuView[] = ["prayer", "calendar", "stopwatch", "notes"];
+const SWIPE_ORDER: MenuView[] = [
+  "prayer",
+  "calendar",
+  "stopwatch",
+  "notes",
+  "wifi",
+  "bluetooth",
+];
 const SWIPE_DIST = 60;
 const SWIPE_SPEED = 500;
 
@@ -114,18 +132,11 @@ const ring =
 
 const Header: React.FC<{
   title?: React.ReactNode;
-  onBack: () => void;
+  /** tombol kembali sekarang berupa tab di luar island (lihat DynamicIsland) */
+  onBack?: () => void;
   right?: React.ReactNode;
-}> = ({ title, onBack, right }) => (
+}> = ({ title, right }) => (
   <div className="flex h-[26px] shrink-0 items-center gap-2">
-    <button
-      type="button"
-      aria-label="Kembali"
-      onClick={onBack}
-      className={`flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20 active:scale-95 ${ring}`}
-    >
-      <ChevronLeft size={15} />
-    </button>
     <div className="min-w-0 flex-1">{title}</div>
     {right}
   </div>
@@ -133,12 +144,84 @@ const Header: React.FC<{
 
 // ---- layar utama ----
 
+interface TileProps {
+  name: string;
+  icon: string;
+  active?: boolean;
+  tone?: "sky" | "amber";
+  dot?: boolean;
+  onClick: () => void;
+  /** klik kanan: nyala / mati langsung */
+  onContext?: () => void;
+}
+
+const MenuTile: React.FC<TileProps> = ({
+  name,
+  icon,
+  active,
+  tone = "sky",
+  dot,
+  onClick,
+  onContext,
+}) => {
+  const lit =
+    tone === "amber"
+      ? "bg-amber-400/30 hover:bg-amber-400/40"
+      : "bg-sky-400/30 hover:bg-sky-400/40";
+
+  return (
+    <motion.button
+      type="button"
+      aria-label={name}
+      title={name}
+      onClick={() => {
+        playSfx(dropSound);
+        onClick();
+      }}
+      onContextMenu={
+        onContext
+          ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              playSfx(dropSound);
+              onContext();
+            }
+          : undefined
+      }
+      onMouseEnter={() => playSfx(chooseSound)}
+      whileHover={{ scale: 1.06 }}
+      whileTap={{ scale: 0.93 }}
+      transition={{ type: "spring", stiffness: 520, damping: 28 }}
+      className={`relative flex min-w-0 flex-1 items-center justify-center rounded-[20px] transition-colors ${
+        active ? lit : "bg-white/[0.07] hover:bg-white/[0.13]"
+      } ${ring}`}
+    >
+      {/* SVG  */}
+      <img
+        src={icon}
+        alt=""
+        draggable={false}
+        className="h-[36px] w-[36px] select-none invert"
+      />
+      {dot && (
+        <span
+          aria-hidden="true"
+          className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-[#F5D547]"
+        />
+      )}
+    </motion.button>
+  );
+};
+
 const HomeView: React.FC<{
   swRunning: boolean;
+  sys: SystemInfo;
   onOpen: (view: MenuView) => void;
-}> = ({ swRunning, onOpen }) => {
+}> = ({ swRunning, sys, onOpen }) => {
+  const { status, radios } = sys;
+
   // nama hanya untuk pembaca layar dan tooltip, tidak ditampilkan
-  const items: { id: MenuView; name: string; icon: string }[] = [
+  const apps: { id: MenuView; name: string; icon: string }[] = [
     { id: "prayer", name: "Jadwal Sholat", icon: shalatIcon },
     { id: "calendar", name: "Kalender", icon: kalenderIcon },
     { id: "stopwatch", name: "Stopwatch", icon: stopwatchIcon },
@@ -146,38 +229,48 @@ const HomeView: React.FC<{
   ];
 
   return (
-    <div className="flex h-full w-full gap-2 p-[18px]">
-      {items.map(({ id, name, icon }) => (
-        <motion.button
-          key={id}
-          type="button"
-          aria-label={name}
-          title={name}
-          onClick={() => {
-            playSfx(dropSound);
-            onOpen(id);
-          }}
-          onMouseEnter={() => playSfx(chooseSound)}
-          whileHover={{ scale: 1.06 }}
-          whileTap={{ scale: 0.93 }}
-          transition={{ type: "spring", stiffness: 520, damping: 28 }}
-          className={`relative flex min-w-0 flex-1 items-center justify-center rounded-[20px] bg-white/[0.07] transition-colors hover:bg-white/[0.13] ${ring}`}
-        >
-          {/* SVG  */}
-          <img
-            src={icon}
-            alt=""
-            draggable={false}
-            className="h-[44px] w-[44px] select-none invert"
+    <div className="flex h-full w-full flex-col gap-2 p-[18px]">
+      <SystemStatusBar
+        battery={status.battery}
+        net={status.net}
+        radios={radios}
+      />
+
+      <div className="flex min-h-0 flex-1 gap-2">
+        {apps.map(({ id, name, icon }) => (
+          <MenuTile
+            key={id}
+            name={name}
+            icon={icon}
+            dot={id === "stopwatch" && swRunning}
+            onClick={() => onOpen(id)}
           />
-          {id === "stopwatch" && swRunning && (
-            <span
-              aria-hidden="true"
-              className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-[#F5D547]"
-            />
-          )}
-        </motion.button>
-      ))}
+        ))}
+      </div>
+
+      <div className="flex min-h-0 flex-1 gap-2">
+        <MenuTile
+          name={`Wi-Fi (klik kanan: ${radios.wifiOn ? "matikan" : "nyalakan"})`}
+          icon={wifiIcon}
+          active={radios.wifiOn}
+          onClick={() => onOpen("wifi")}
+          onContext={() => void sys.setWifi(!radios.wifiOn)}
+        />
+        <MenuTile
+          name={`Bluetooth (klik kanan: ${radios.bluetoothOn ? "matikan" : "nyalakan"})`}
+          icon={bluetoothIcon}
+          active={radios.bluetoothOn}
+          onClick={() => onOpen("bluetooth")}
+          onContext={() => void sys.setBluetooth(!radios.bluetoothOn)}
+        />
+        <MenuTile
+          name={`Mode pesawat (${radios.airplane ? "nyala" : "mati"})`}
+          icon={airplaneIcon}
+          active={radios.airplane}
+          tone="amber"
+          onClick={() => void sys.setAirplane(!radios.airplane)}
+        />
+      </div>
     </div>
   );
 };
@@ -783,7 +876,6 @@ const StopwatchView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                 className="flex items-center gap-1 text-[10.5px] font-normal text-white/50"
               >
                 <Lock size={10} />
-                terkunci
               </span>
             )}
           </span>
@@ -798,7 +890,11 @@ const StopwatchView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           <button
             type="button"
             aria-label="Atur ulang"
-            onClick={() => stopwatch.reset()}
+            onClick={() => {
+              stopwatch.reset();
+              // saat dijeda tidak ada interval yang memperbarui layar
+              setMs(stopwatch.elapsed());
+            }}
             disabled={ms === 0 && !running}
             className={`flex h-[38px] w-[38px] items-center justify-center rounded-full bg-white/10 transition-colors hover:bg-white/20 active:scale-95 disabled:opacity-40 ${ring}`}
           >
@@ -876,6 +972,7 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
 }) => {
   const now = useNow(1000);
   const swRunning = useStopwatchRunning();
+  const sys = useSystemStatus();
   const { loc, status, detectGps, setManual } = useLocation(onBusyChange);
   const schedule = usePrayerSchedule(loc.lat, loc.lng, now);
   const prayer = getPrayerState(now, schedule.tz, schedule.resolve);
@@ -959,13 +1056,47 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
         return <StopwatchView onBack={back} />;
       case "notes":
         return <NotesView onBack={back} />;
+      case "wifi":
+        return (
+          <WifiView
+            radios={sys.radios}
+            onToggle={(on) => void sys.setWifi(on)}
+            onRefresh={() => void sys.refreshRadios()}
+            onBack={back}
+          />
+        );
+      case "bluetooth":
+        return (
+          <BluetoothView
+            radios={sys.radios}
+            onToggle={(on) => void sys.setBluetooth(on)}
+            onBack={back}
+          />
+        );
       default:
-        return <HomeView swRunning={swRunning} onOpen={onViewChange} />;
+        return (
+          <HomeView swRunning={swRunning} sys={sys} onOpen={onViewChange} />
+        );
     }
   };
 
+  // klik area kosong di sub-halaman -> kembali (sama seperti tab kembali)
+  const onEmptyClick = (e: React.MouseEvent) => {
+    if (view === "home") return;
+    const target = e.target as HTMLElement;
+    if (
+      target.closest(
+        "button, a, input, textarea, select, label, [role='switch'], [role='button']",
+      )
+    )
+      return;
+    // habis memilih teks: bukan klik kosong
+    if (window.getSelection()?.toString()) return;
+    onViewChange(getMenuBack(view));
+  };
+
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full" onClick={onEmptyClick}>
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={view}
@@ -985,9 +1116,10 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
             if ((e.target as HTMLElement).closest("input, textarea")) return;
             dragControls.start(e);
           }}
-          onDragStart={() => {
-            dragged.current = true;
-            window.getSelection()?.removeAllRanges();
+          onDragStart={() => window.getSelection()?.removeAllRanges()}
+          onDrag={(_, info) => {
+            // geseran kecil tetap dianggap klik
+            if (Math.abs(info.offset.x) > 8) dragged.current = true;
           }}
           onDragEnd={onSwipeEnd}
           onClickCapture={(e) => {
