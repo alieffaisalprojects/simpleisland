@@ -2,6 +2,7 @@ mod island_native; // Timer Clock Windows dan HTTP request
 mod file_actions; // Aksi file untuk drag & drop ke island
 mod file_convert; // Konversi ICO / PDF / Word + folder Explorer aktif
 mod settings; // Halaman Pengaturan (Umum + Tampilan)
+mod spectrum; // Spektrum audio asli (loopback + FFT) untuk widget Spotify
 mod system_status; // Baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat
 
 use base64::{engine::general_purpose, Engine as _};
@@ -1321,6 +1322,7 @@ pub fn run() {
             island_native::clock_timer_toggle,
             island_native::clock_timer_cancel,
             island_focus,
+            spectrum::spectrum_set_active,
             file_actions::file_inspect,
             file_actions::file_tools,
             file_actions::file_action,
@@ -1387,6 +1389,9 @@ pub fn run() {
 
             // Pantau timer Windows Clock.
             island_native::start_clock_watcher(app.handle().clone());
+
+            // Tangkap audio sistem untuk spektrum (aktif hanya saat diminta frontend).
+            spectrum::start(app.handle().clone());
 
             #[cfg(windows)]
             {

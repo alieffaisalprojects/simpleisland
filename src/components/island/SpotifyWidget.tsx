@@ -14,6 +14,7 @@ import {
 } from "framer-motion";
 import { Minus, Music, Pause, Play, Plus, Volume2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { LyricsState, SpotifyTrack } from "../../types";
 import { LyricsIcon, LyricsView } from "./LyricsView";
 import { useActiveLine } from "../../hooks/useLyrics";
@@ -313,6 +314,225 @@ const spectrumStyle = (palette: string[]) =>
     "--spectrum-c": palette[2] ?? "#d4d7de",
   }) as React.CSSProperties;
 
+// ---- Spektrum audio asli ----
+
+const SPECTRUM_BARS = 5;
+
+// Bar mengecil menjadi titik: lama animasi dan jeda antar bar (ms)
+const SPECTRUM_SETTLE_MS = 850;
+const SPECTRUM_SETTLE_STAGGER_MS = 55;
+
+// Data terbaru dari backend (event "audio-spectrum"): 5 angka 0..1
+const spectrumFeed = {
+  levels: [0, 0, 0, 0, 0] as number[],
+  stamp: 0,
+};
+
+let spectrumUsers = 0;
+let spectrumListening = false;
+
+// Pendengar event dipasang sekali saja dan tidak dilepas
+function ensureSpectrumListener() {
+  if (spectrumListening) return;
+  spectrumListening = true;
+
+  listen<number[]>("audio-spectrum", (event) => {
+    if (Array.isArray(event.payload)) {
+      spectrumFeed.levels = event.payload;
+      spectrumFeed.stamp = performance.now();
+    }
+  }).catch((error) => {
+    spectrumListening = false;
+    console.debug("audio-spectrum listener failed:", error);
+  });
+}
+
+// Backend hanya menangkap audio selama ada spektrum yang membutuhkan
+function spectrumAcquire() {
+  ensureSpectrumListener();
+  spectrumUsers += 1;
+  if (spectrumUsers === 1) {
+    invoke("spectrum_set_active", { active: true }).catch(() => {});
+  }
+}
+
+function spectrumRelease() {
+  spectrumUsers = Math.max(0, spectrumUsers - 1);
+  if (spectrumUsers === 0) {
+    invoke("spectrum_set_active", { active: false }).catch(() => {});
+  }
+}
+
+// Tinggi bar mengikuti suara asli. Saat musik berhenti bar mengecil jadi titik.
+// Tampilan (lebar, warna, gradien, jarak) tetap dari CSS .island-spectrum;
+// hook ini hanya mengatur tinggi bar. Bila data audio tidak tersedia,
+// animasi CSS bawaan dipakai kembali.
+function useSpectrumDriver(
+  ref: React.RefObject<HTMLDivElement | null>,
+  playing: boolean,
+) {
+  const playingRef = useRef(playing);
+  const kickRef = useRef<() => void>(() => {});
+
+  // Siapkan bar sekali saat dipasang
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+
+    const bars = Array.from(root.children) as HTMLElement[];
+    if (bars.length === 0) return;
+
+    // Ukur: lebar bar = ukuran titik, tinggi wadah = tinggi bar maksimum
+    bars.forEach((b) => {
+      b.style.animation = "none";
+      b.style.transform = "none";
+      b.style.transition = "none";
+      b.style.height = "";
+    });
+
+    const barW = parseFloat(getComputedStyle(bars[0]).width) || 3;
+    const natural = Math.max(
+      root.clientHeight,
+      ...bars.map((b) => b.offsetHeight),
+    );
+    const maxH = natural >= barW * 2 ? natural : Math.max(barW * 5, 14);
+    const minH = barW;
+
+    // Kunci tinggi wadah agar tata letak tidak bergeser saat tinggi bar berubah
+    root.style.height = `${maxH}px`;
+    bars.forEach((b) => (b.style.height = `${minH}px`));
+
+    const shown = bars.map(() => 0);
+    let from = bars.map(() => 0); // tinggi bar saat musik berhenti
+    let pauseAt = -1e9; // waktu musik berhenti
+    let wasPlaying = playingRef.current;
+    let css = false; // true = animasi CSS bawaan sedang dipakai
+    let startedAt = performance.now();
+    let running = false;
+    let raf = 0;
+
+    const useCss = (on: boolean) => {
+      if (css === on) return;
+      css = on;
+      bars.forEach((b) => {
+        b.style.animation = on ? "" : "none";
+        b.style.transform = on ? "" : "none";
+        b.style.height = on ? "" : `${minH}px`;
+      });
+    };
+
+    const step = (now: number) => {
+      const isPlaying = playingRef.current;
+      const fresh = now - spectrumFeed.stamp < 700;
+
+      // Data audio tidak ada (bukan Windows / gagal menangkap): pakai animasi CSS
+      useCss(isPlaying && !fresh && now - startedAt > 1200);
+
+      if (!css) {
+        if (isPlaying) {
+          wasPlaying = true;
+
+          for (let i = 0; i < bars.length; i++) {
+            const target = fresh
+              ? Math.min(
+                  1,
+                  Math.max(0, spectrumFeed.levels[i % SPECTRUM_BARS] ?? 0),
+                )
+              : 0;
+
+            // naik cepat, turun pelan
+            shown[i] += (target - shown[i]) * (target > shown[i] ? 0.5 : 0.14);
+            bars[i].style.height =
+              `${(minH + (maxH - minH) * shown[i]).toFixed(2)}px`;
+          }
+        } else {
+          // Musik berhenti: tiap bar mengecil perlahan menjadi titik
+          // (ease-out, berurutan dari kiri ke kanan, berbasis waktu)
+          if (wasPlaying) {
+            wasPlaying = false;
+            pauseAt = now;
+            from = shown.slice();
+          }
+
+          let settled = true;
+
+          for (let i = 0; i < bars.length; i++) {
+            const t = Math.min(
+              1,
+              Math.max(
+                0,
+                (now - pauseAt - i * SPECTRUM_SETTLE_STAGGER_MS) /
+                  SPECTRUM_SETTLE_MS,
+              ),
+            );
+            if (t < 1) settled = false;
+
+            const ease = 1 - Math.pow(1 - t, 3);
+            shown[i] = from[i] * (1 - ease);
+            bars[i].style.height =
+              `${(minH + (maxH - minH) * shown[i]).toFixed(2)}px`;
+          }
+
+          // Semua bar sudah menjadi titik: selesai
+          if (settled) {
+            bars.forEach((b) => (b.style.height = `${minH}px`));
+            running = false;
+            return;
+          }
+        }
+      }
+
+      raf = requestAnimationFrame(step);
+    };
+
+    kickRef.current = () => {
+      startedAt = performance.now();
+      if (running) return;
+      running = true;
+      raf = requestAnimationFrame(step);
+    };
+
+    return () => {
+      cancelAnimationFrame(raf);
+      running = false;
+      kickRef.current = () => {};
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Putar / berhenti: minta data audio hanya saat musik main
+  useEffect(() => {
+    playingRef.current = playing;
+    kickRef.current();
+
+    if (!playing) return;
+
+    spectrumAcquire();
+    return () => spectrumRelease();
+  }, [playing]);
+}
+
+// Spektrum musik (5 bar). Markup dan class sama seperti sebelumnya.
+const Spectrum: React.FC<{
+  playing: boolean;
+  palette: string[];
+  extraClass?: string;
+}> = ({ playing, palette, extraClass = "" }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useSpectrumDriver(ref, playing);
+
+  return (
+    <div
+      ref={ref}
+      className={`island-spectrum ${extraClass}${playing ? " is-playing" : ""}`}
+      style={spectrumStyle(palette)}
+    >
+      {Array.from({ length: SPECTRUM_BARS }, (_, i) => (
+        <i key={i} />
+      ))}
+    </div>
+  );
+};
+
 // Style dasar tombol musik
 const buttonBase =
   "inline-flex items-center justify-center text-white/90 hover:text-white active:scale-90 transition-transform duration-150 focus:outline-none";
@@ -552,14 +772,7 @@ const CompactView: React.FC<{
 
     {/* Kontainer spektrum musik */}
     <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center">
-      <div
-        className={`island-spectrum ${track.isPlaying ? "is-playing" : ""}`}
-        style={spectrumStyle(palette)}
-      >
-        {Array.from({ length: 5 }, (_, i) => (
-          <i key={i} />
-        ))}
-      </div>
+      <Spectrum playing={track.isPlaying} palette={palette} />
     </div>
   </div>
 );
@@ -870,14 +1083,11 @@ const ExpandedView: React.FC<{
         </div>
 
         {/* Spektrum musik */}
-        <div
-          className={`island-spectrum expanded-spectrum ${track.isPlaying ? "is-playing" : ""}`}
-          style={spectrumStyle(palette)}
-        >
-          {Array.from({ length: 5 }, (_, i) => (
-            <i key={i} />
-          ))}
-        </div>
+        <Spectrum
+          playing={track.isPlaying}
+          palette={palette}
+          extraClass="expanded-spectrum "
+        />
       </motion.div>
 
       {/* Kontainer progress lagu: waktu kiri | bar | waktu kanan */}
@@ -1177,14 +1387,7 @@ const LyricMiniView: React.FC<{
 
       {/* Kontainer spektrum musik */}
       <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center">
-        <div
-          className={`island-spectrum ${track.isPlaying ? "is-playing" : ""}`}
-          style={spectrumStyle(palette)}
-        >
-          {Array.from({ length: 5 }, (_, i) => (
-            <i key={i} />
-          ))}
-        </div>
+        <Spectrum playing={track.isPlaying} palette={palette} />
       </div>
     </div>
   );
