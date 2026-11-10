@@ -29,8 +29,11 @@ use tauri_plugin_autostart::ManagerExt;
 
 pub const SETTINGS_LABEL: &str = "settings";
 
-// Ukuran jendela Pengaturan (tetap, tidak bisa diubah atau di-maximize)
+// Ukuran jendela Pengaturan (lebar, tinggi). Boleh di-maximize, tetapi hasilnya
+// dibatasi MAX supaya tidak melebar sampai memenuhi layar.
 const SETTINGS_WINDOW_SIZE: (f64, f64) = (840.0, 580.0);
+const SETTINGS_WINDOW_MIN: (f64, f64) = (720.0, 500.0);
+const SETTINGS_WINDOW_MAX: (f64, f64) = (1000.0, 700.0);
 
 // Dibaca oleh thread pemantau (Spotify, title bar) supaya tidak memunculkan island
 // saat dimatikan dari Pengaturan.
@@ -400,8 +403,7 @@ pub fn open_settings(app: &AppHandle) {
         // Halaman yang dimuat sama dengan island; main.tsx memilih tampilan
         // berdasarkan label window ("settings").
         //
-        // Ukuran dikunci: tidak bisa ditarik dan tombol maximize dimatikan,
-        // jadi tampilan selalu sama.
+        // Boleh ditarik dan di-maximize, tetapi ukurannya dibatasi antara MIN dan MAX.
         let built = WebviewWindowBuilder::new(
             &app,
             SETTINGS_LABEL,
@@ -409,14 +411,42 @@ pub fn open_settings(app: &AppHandle) {
         )
         .title("Pengaturan Simple Island")
         .inner_size(SETTINGS_WINDOW_SIZE.0, SETTINGS_WINDOW_SIZE.1)
-        .resizable(false)
-        .maximizable(false)
+        .min_inner_size(SETTINGS_WINDOW_MIN.0, SETTINGS_WINDOW_MIN.1)
+        .max_inner_size(SETTINGS_WINDOW_MAX.0, SETTINGS_WINDOW_MAX.1)
+        .resizable(true)
+        .maximizable(true)
         .center()
         .theme(Some(Theme::Dark))
         .build();
 
-        if let Err(e) = built {
-            eprintln!("Gagal membuka jendela Pengaturan: {e}");
+        match built {
+            Ok(window) => {
+                // Windows tidak selalu menghormati batas maksimum saat tombol maximize
+                // ditekan. Jadi begitu jendela masuk status maximize, batalkan maximize
+                // lalu pasang ukuran maksimum yang diizinkan dan taruh di tengah layar.
+                let target = window.clone();
+
+                window.on_window_event(move |event| {
+                    if !matches!(event, tauri::WindowEvent::Resized(_)) {
+                        return;
+                    }
+
+                    let win = target.clone();
+
+                    // dijalankan di task terpisah supaya tidak memblokir event loop
+                    tauri::async_runtime::spawn(async move {
+                        if win.is_maximized().unwrap_or(false) {
+                            let _ = win.unmaximize();
+                            let _ = win.set_size(tauri::LogicalSize::new(
+                                SETTINGS_WINDOW_MAX.0,
+                                SETTINGS_WINDOW_MAX.1,
+                            ));
+                            let _ = win.center();
+                        }
+                    });
+                });
+            }
+            Err(e) => eprintln!("Gagal membuka jendela Pengaturan: {e}"),
         }
     });
 }
