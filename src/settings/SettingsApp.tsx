@@ -3,20 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  AlertCircle,
-  FileUp,
-  Info,
-  LocateFixed,
-  LogOut,
-  Palette,
-  Power,
-  RotateCcw,
-  Rocket,
-  Settings,
-  Volume2,
-} from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { AlertCircle, Info, RotateCcw, ZoomIn } from "lucide-react";
 import { IslandShoulders } from "../components/island/IslandShoulders";
 import { ISLAND_TOP } from "../components/island/dynamic_island/constants";
 import {
@@ -36,11 +23,28 @@ import {
 } from "./settings";
 import type { AppSettings, IslandStyle, SizeMode } from "./settings";
 
-type Tab = "general" | "appearance";
+// gambar panduan instalasi
+import defenderStep1 from "../assets/styles/warnings/windows-defender1.webp";
+import defenderStep2 from "../assets/styles/warnings/windows-defender2.webp";
 
-const TABS: { id: Tab; label: string; Icon: LucideIcon }[] = [
-  { id: "general", label: "Umum", Icon: Settings },
-  { id: "appearance", label: "Tampilan", Icon: Palette },
+// ikon sidebar (svg hitam, dijadikan putih lewat filter di tampilan)
+import iconUmum from "../assets/styles/settings/umum.svg";
+import iconTampilan from "../assets/styles/settings/tampilan.svg";
+import iconInstal from "../assets/styles/settings/instal.svg";
+
+// ikon baris halaman Umum (svg hitam, dijadikan putih lewat filter)
+import iconAktifkan from "../assets/styles/generals/aktifkan.svg";
+import iconOtomatis from "../assets/styles/generals/otomatis.svg";
+import iconMenu from "../assets/styles/generals/menu.svg";
+import iconSuara from "../assets/styles/generals/suara.svg";
+import iconNonaktifkan from "../assets/styles/generals/nonaktifkan.svg";
+
+type Tab = "general" | "appearance" | "install";
+
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: "general", label: "Umum", icon: iconUmum },
+  { id: "appearance", label: "Tampilan", icon: iconTampilan },
+  { id: "install", label: "Instalasi", icon: iconInstal },
 ];
 
 // komponen kecil
@@ -77,7 +81,7 @@ const Card: React.FC<{ title?: string; children: React.ReactNode }> = ({
 }) => (
   <section className="mb-5">
     {title && (
-      <h2 className="mb-2 px-1 text-[11.5px] font-semibold uppercase tracking-[0.08em] text-white/40">
+      <h2 className="mb-2 px-1 text-[11.5px] font-bold uppercase tracking-[0.08em] text-white">
         {title}
       </h2>
     )}
@@ -88,31 +92,19 @@ const Card: React.FC<{ title?: string; children: React.ReactNode }> = ({
 );
 
 const Row: React.FC<{
-  Icon: LucideIcon;
+  icon: string;
   title: string;
   desc?: string;
   children: React.ReactNode;
-}> = ({ Icon, title, desc, children }) => (
+}> = ({ icon, title, desc, children }) => (
   <div className="flex items-center gap-3.5 px-4 py-3.5">
-    <div
-      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] text-white ${
-        Icon === Power
-          ? "bg-[#d30c0c]"
-          : Icon === Rocket
-            ? "bg-[#d30c0c]"
-            : Icon === FileUp
-              ? "bg-[#34C759]"
-              : Icon === Volume2
-                ? "bg-[#34C759]"
-                : Icon === LocateFixed
-                  ? "bg-[#919191]"
-                  : "bg-[#919191]"
-      }`}
-    >
-      <Icon
-        size={23}
-        strokeWidth={2.15}
-        className="drop-shadow-[0_1px_1px_rgba(0,0,0,0.25)]"
+    <div className="flex h-8 w-8 shrink-0 items-center justify-center">
+      <img
+        src={icon}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        className="h-[23px] w-[23px] brightness-0 invert"
       />
     </div>
 
@@ -369,7 +361,13 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
       {!settings.islandEnabled && (
         <div className="mb-5 flex items-center gap-4 rounded-[18px] bg-sky-400/10 p-4 ring-1 ring-sky-300/25">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] bg-sky-400/20 text-sky-200">
-            <Power size={20} />
+            <img
+              src={iconAktifkan}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              className="h-[22px] w-[22px] brightness-0 invert"
+            />
           </div>
 
           <div className="min-w-0 flex-1">
@@ -389,7 +387,7 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
       )}
 
       <Card title="Simple Island">
-        <Row Icon={Power} title="Aktifkan Simple Island">
+        <Row icon={iconAktifkan} title="Aktifkan Simple Island">
           <Toggle
             label="Aktifkan Simple Island"
             checked={settings.islandEnabled}
@@ -397,7 +395,10 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
           />
         </Row>
 
-        <Row Icon={Rocket} title="Jalankan Otomatis Saat Komputer Dinyalakan">
+        <Row
+          icon={iconOtomatis}
+          title="Jalankan Otomatis Saat Komputer Dinyalakan"
+        >
           <Toggle
             label="Jalankan saat Windows startup"
             checked={settings.autostart}
@@ -408,7 +409,7 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
 
       <Card title="Fitur">
         <Row
-          Icon={FileUp}
+          icon={iconMenu}
           title="Menu Serbaguna"
           desc="Menu aksi (konversi, ZIP, salin, dll.) saat file diseret ke island."
         >
@@ -420,7 +421,7 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
         </Row>
 
         <Row
-          Icon={Volume2}
+          icon={iconSuara}
           title="Suara"
           desc="Efek suara saat memilih, melepas, dan menyelesaikan aksi file."
         >
@@ -434,7 +435,7 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
 
       <Card title="Lainnya">
         <Row
-          Icon={LogOut}
+          icon={iconNonaktifkan}
           title="Nonaktifkan SImple Island"
           desc="Menutup island dan ikon dari system tray."
         >
@@ -540,7 +541,9 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
               <div className="px-4 py-3.5">
                 <div className="mb-2 flex items-center justify-between">
                   <div>
-                    <div className="text-[13.5px] font-medium">Sudut Tepian</div>
+                    <div className="text-[13.5px] font-medium">
+                      Sudut Tepian
+                    </div>
                     <div className="mt-[2px] text-[12px] text-white/50">
                       Lengkung kiri-kanan di tepi atas layar.
                     </div>
@@ -582,7 +585,9 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
             height={compact.h}
             onWidth={(v) => setSize({ [keys.compact.w]: v })}
             onHeight={(v) => setSize({ [keys.compact.h]: v })}
-            onReset={() => setSize({ [keys.compact.w]: 0, [keys.compact.h]: 0 })}
+            onReset={() =>
+              setSize({ [keys.compact.w]: 0, [keys.compact.h]: 0 })
+            }
           />
 
           <SizeGroup
@@ -619,7 +624,6 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
       </Card>
 
       <div className="flex items-center justify-between gap-4 px-1">
-
         <button
           type="button"
           disabled={isDefault}
@@ -630,6 +634,261 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
           Kembalikan semua ke tampilan bawaan
         </button>
       </div>
+    </>
+  );
+};
+
+// halaman instalasi
+
+interface GuideImage {
+  src: string;
+  alt: string;
+}
+
+interface GuideStep {
+  title: string;
+  body: React.ReactNode;
+  image?: GuideImage;
+}
+
+// nama tombol Windows dibuat tebal supaya mudah dicari di layar
+const Key: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <strong className="font-semibold text-white">{children}</strong>
+);
+
+const INSTALL_STEPS: GuideStep[] = [
+  {
+    title: "Jalankan installer dan klik More info",
+    body: (
+      <>
+        Buka file installer Simple Island. Jika muncul layar biru{" "}
+        <Key>Windows protected your PC</Key>, jangan ditutup. Klik tulisan{" "}
+        <Key>More info</Key> (Info lebih lanjut) di bagian teks.
+      </>
+    ),
+    image: {
+      src: defenderStep1,
+      alt: "Peringatan Windows protected your PC dengan tautan More info",
+    },
+  },
+  {
+    title: "Klik Run anyway",
+    body: (
+      <>
+        Setelah <Key>More info</Key> diklik, tombol <Key>Run anyway</Key> (Tetap
+        jalankan) muncul di bagian bawah jendela. Klik tombol itu untuk
+        melanjutkan instalasi.
+      </>
+    ),
+    image: {
+      src: defenderStep2,
+      alt: "Tombol Run anyway pada peringatan Windows protected your PC",
+    },
+  },
+  {
+    title: "Klik Dismiss jika Windows Security muncul",
+    body: (
+      <>
+        Windows Defender kadang menampilkan notifikasi di pojok kanan bawah saat
+        installer diperiksa. Klik <Key>Dismiss</Key> (Tutup) pada notifikasi itu
+        supaya instalasi tidak terhenti, lalu lanjutkan ke langkah berikutnya.
+      </>
+    ),
+  },
+  {
+    title: "Selesaikan instalasi",
+    body: (
+      <>
+        Ikuti wizard sampai selesai, lalu buka Simple Island dari menu Start.
+        Peringatan ini hanya muncul sekali saat pertama kali installer
+        dijalankan.
+      </>
+    ),
+  },
+];
+
+const HELP_ITEMS: { title: string; body: React.ReactNode }[] = [
+  {
+    title: "Tombol Run anyway tidak muncul",
+    body: (
+      <>
+        Klik kanan file installer, pilih <Key>Properties</Key>, centang{" "}
+        <Key>Unblock</Key> di bagian bawah tab General, klik <Key>Apply</Key>,
+        lalu jalankan installer lagi.
+      </>
+    ),
+  },
+  {
+    title: "File hilang atau dikarantina oleh Defender",
+    body: (
+      <>
+        Buka <Key>Windows Security</Key>, pilih{" "}
+        <Key>Virus &amp; threat protection</Key>, lalu{" "}
+        <Key>Protection history</Key>. Pilih file Simple Island dan izinkan di
+        perangkat ini, kemudian jalankan installer lagi.
+      </>
+    ),
+  },
+  {
+    title: "Browser memblokir unduhan",
+    body: (
+      <>
+        Di Edge atau Chrome, buka daftar unduhan lalu pilih <Key>Keep</Key> atau{" "}
+        <Key>Keep anyway</Key> (Simpan) pada file installer.
+      </>
+    ),
+  },
+];
+
+// gambar panduan; klik untuk memperbesar
+const GuideShot: React.FC<{
+  image: GuideImage;
+  onOpen: (image: GuideImage) => void;
+}> = ({ image, onOpen }) => (
+  <button
+    type="button"
+    onClick={() => onOpen(image)}
+    aria-label={`Perbesar gambar: ${image.alt}`}
+    className="group relative mt-4 block w-full overflow-hidden rounded-[14px] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/70"
+  >
+    <img
+      src={image.src}
+      alt={image.alt}
+      loading="lazy"
+      draggable={false}
+      className="block h-auto w-full transition duration-200 group-hover:brightness-105"
+    />
+
+    <span className="absolute bottom-2.5 right-2.5 flex h-[26px] items-center gap-1.5 rounded-[8px] bg-black/60 px-2 text-[11px] font-medium text-white/80 opacity-0 backdrop-blur transition group-hover:opacity-100 group-focus-visible:opacity-100">
+      <ZoomIn size={13} />
+      Perbesar
+    </span>
+  </button>
+);
+
+// tampilan gambar layar penuh
+const Lightbox: React.FC<{ image: GuideImage | null; onClose: () => void }> = ({
+  image,
+  onClose,
+}) => {
+  useEffect(() => {
+    if (!image) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [image, onClose]);
+
+  return (
+    <AnimatePresence>
+      {image && (
+        <motion.div
+          role="dialog"
+          aria-modal="true"
+          aria-label={image.alt}
+          className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/80 p-8 backdrop-blur-sm"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.16 }}
+          onClick={onClose}
+        >
+          <motion.img
+            src={image.src}
+            alt={image.alt}
+            draggable={false}
+            className="max-h-full max-w-full rounded-[14px] shadow-2xl ring-1 ring-white/15"
+            initial={{ scale: 0.96 }}
+            animate={{ scale: 1 }}
+            exit={{ scale: 0.97 }}
+            transition={{ type: "spring", stiffness: 420, damping: 34 }}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
+
+// bagian tanpa latar dan garis, hanya judul dan isi
+const Section: React.FC<{ title: string; children: React.ReactNode }> = ({
+  title,
+  children,
+}) => (
+  <section className="mb-10">
+    <h2 className="mb-5 px-1 text-[11.5px] font-bold uppercase tracking-[0.08em] text-white">
+      {title}
+    </h2>
+    {children}
+  </section>
+);
+
+const InstallPage: React.FC = () => {
+  const [zoomed, setZoomed] = useState<GuideImage | null>(null);
+
+  return (
+    <>
+      <div className="mb-10 border border-slate-200 bg-slate-100 p-4">
+        <div className="text-[14px] font-semibold text-slate-900 font-bold">
+          Pemberitahuan Windows SmartScreen
+        </div>
+        <p className="mt-[3px] text-[14px] leading-[1.5] text-slate-600">
+          Peringatan ini muncul karena berkas installer belum dipublikasikan
+          dengan sertifikat berbayar. Saya menjamin keamanan aplikasi ini. Silakan
+          ikuti panduan berikut untuk melanjutkan proses instalasi.
+        </p>
+      </div>
+
+      <Section title="Melewati peringatan SmartScreen">
+        <ol className="flex flex-col gap-9 px-1">
+          {INSTALL_STEPS.map((step, index) => (
+            <li key={step.title} className="flex gap-4">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-[13px] font-bold tabular-nums text-black">
+                {index + 1}
+              </span>
+
+              <div className="min-w-0 flex-1">
+                <h3 className="text-[14px] font-semibold tracking-[-0.01em]">
+                  {step.title}
+                </h3>
+
+                <p className="mt-1 text-[12.5px] leading-[1.6] text-white/60">
+                  {step.body}
+                </p>
+
+                {step.image && (
+                  <GuideShot image={step.image} onOpen={setZoomed} />
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      </Section>
+
+      <Section title="Jika masih terhambat">
+        <div className="flex flex-col gap-6 px-1">
+          {HELP_ITEMS.map((item) => (
+            <div key={item.title} className="pl-11">
+              <div className="text-[13px] font-semibold tracking-[-0.01em]">
+                {item.title}
+              </div>
+
+              <p className="mt-1 text-[12px] leading-[1.6] text-white/55">
+                {item.body}
+              </p>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <div className="flex items-center gap-2.5 px-1 pb-2 text-[11.5px] text-white/45">
+        <Info size={14} className="shrink-0" />
+        Unduh installer hanya dari sumber resmi Simple Island.
+      </div>
+
+      <Lightbox image={zoomed} onClose={() => setZoomed(null)} />
     </>
   );
 };
@@ -666,7 +925,7 @@ export const SettingsApp: React.FC = () => {
       {/* sidebar */}
       <aside className="flex w-[200px] shrink-0 flex-col border-r border-white/[0.07] bg-[#0b0c0e] p-3">
         <nav className="flex flex-col gap-1 pt-2">
-          {TABS.map(({ id, label, Icon }) => {
+          {TABS.map(({ id, label, icon }) => {
             const active = tab === id;
 
             return (
@@ -685,7 +944,15 @@ export const SettingsApp: React.FC = () => {
                     transition={{ type: "spring", stiffness: 500, damping: 36 }}
                   />
                 )}
-                <Icon size={17} className="relative" />
+                <img
+                  src={icon}
+                  alt=""
+                  aria-hidden="true"
+                  draggable={false}
+                  className={`relative h-[17px] w-[17px] brightness-0 invert transition-opacity ${
+                    active ? "opacity-100" : "opacity-55"
+                  }`}
+                />
                 <span className="relative">{label}</span>
               </button>
             );
@@ -713,7 +980,7 @@ export const SettingsApp: React.FC = () => {
       {/* konten */}
       <main className="relative z-[1] min-w-0 flex-1 overflow-y-auto px-8 py-7">
         <h1 className="mb-5 text-[28px] font-semibold tracking-[-0.04em]">
-          {tab === "general" ? "Umum" : "Tampilan"}
+          {TABS.find((t) => t.id === tab)?.label}
         </h1>
 
         {ready && (
@@ -725,11 +992,13 @@ export const SettingsApp: React.FC = () => {
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.16 }}
             >
-              {tab === "general" ? (
+              {tab === "general" && (
                 <GeneralPage settings={settings} commit={commit} />
-              ) : (
+              )}
+              {tab === "appearance" && (
                 <AppearancePage settings={settings} commit={commit} />
               )}
+              {tab === "install" && <InstallPage />}
             </motion.div>
           </AnimatePresence>
         )}

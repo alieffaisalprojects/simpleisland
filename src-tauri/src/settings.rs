@@ -29,6 +29,9 @@ use tauri_plugin_autostart::ManagerExt;
 
 pub const SETTINGS_LABEL: &str = "settings";
 
+// Ukuran jendela Pengaturan (tetap, tidak bisa diubah atau di-maximize)
+const SETTINGS_WINDOW_SIZE: (f64, f64) = (840.0, 580.0);
+
 // Dibaca oleh thread pemantau (Spotify, title bar) supaya tidak memunculkan island
 // saat dimatikan dari Pengaturan.
 static ISLAND_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -396,15 +399,18 @@ pub fn open_settings(app: &AppHandle) {
 
         // Halaman yang dimuat sama dengan island; main.tsx memilih tampilan
         // berdasarkan label window ("settings").
+        //
+        // Ukuran dikunci: tidak bisa ditarik dan tombol maximize dimatikan,
+        // jadi tampilan selalu sama.
         let built = WebviewWindowBuilder::new(
             &app,
             SETTINGS_LABEL,
             WebviewUrl::App("index.html".into()),
         )
         .title("Pengaturan Simple Island")
-        .inner_size(840.0, 580.0)
-        .min_inner_size(720.0, 500.0)
-        .resizable(true)
+        .inner_size(SETTINGS_WINDOW_SIZE.0, SETTINGS_WINDOW_SIZE.1)
+        .resizable(false)
+        .maximizable(false)
         .center()
         .theme(Some(Theme::Dark))
         .build();
