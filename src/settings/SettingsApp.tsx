@@ -95,13 +95,13 @@ const Row: React.FC<{
 }> = ({ Icon, title, desc, children }) => (
   <div className="flex items-center gap-3.5 px-4 py-3.5">
     <div
-      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_4px_9px_rgba(0,0,0,0.18)] ${
+      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] text-white ${
         Icon === Power
-          ? "bg-[#1900ff]"
+          ? "bg-[#d30c0c]"
           : Icon === Rocket
-            ? "bg-[#ff1111]"
+            ? "bg-[#d30c0c]"
             : Icon === FileUp
-              ? "bg-[#34a5c7]"
+              ? "bg-[#34C759]"
               : Icon === Volume2
                 ? "bg-[#34C759]"
                 : Icon === LocateFixed

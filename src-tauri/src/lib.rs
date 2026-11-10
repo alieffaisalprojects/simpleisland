@@ -840,7 +840,8 @@ mod caption_avoid {
     use super::SPOTIFY_ACTIVE;
     use std::ffi::c_void;
     use std::sync::atomic::Ordering;
-    use std::time::Duration;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
     use tauri::{AppHandle, Emitter};
     use windows::Win32::Foundation::{
         BOOL, FALSE, HWND, LPARAM, POINT, RECT, TRUE,
@@ -848,18 +849,51 @@ mod caption_avoid {
     use windows::Win32::Graphics::Dwm::{
         DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
     };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation, IUIAutomation, UIA_ButtonControlTypeId, UIA_DocumentControlTypeId,
+        UIA_TabItemControlTypeId,
+    };
     use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetCursorPos, GetWindowLongPtrW,
         GetWindowRect, IsIconic, IsWindowVisible, SetWindowPos,
-        GWL_EXSTYLE, HWND_BOTTOM, HWND_TOPMOST, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, WS_EX_TOOLWINDOW,
+        GWL_EXSTYLE, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_TOOLWINDOW,
         WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
     const CAPTION_HEIGHT: f64 = 36.0;
     const CAPTION_CONTROLS_WIDTH: f64 = 190.0;
-    const POLL_MS: u64 = 50;
+    const POLL_MS: u64 = 16;
+
+    // Jeda minimum antara dua pemulihan status topmost yang hilang.
+    const REASSERT_MS: u64 = 200;
+
+    // Strip tab di bagian atas window aplikasi lain (tab browser, tab Explorer, dst).
+    const TAB_BAND_HEIGHT: f64 = 46.0; // tinggi strip tab (DIP) dari tepi atas window
+    const TAB_SCAN_EVERY_MS: u64 = 100; // jeda antar pemindaian saat kursor di atas strip
+    const TAB_CACHE_TTL_MS: u64 = 1500; // hasil pindai dianggap basi setelah ini
+    const TAB_MAX_DEPTH: u32 = 12; // kedalaman maksimum pohon UI yang ditelusuri
+    const TAB_MAX_NODES: u32 = 500; // batas jumlah elemen per pemindaian
+
+    // Hasil pindai posisi tab (koordinat layar) untuk satu window.
+    struct TabCache {
+        hwnd: isize,
+        rects: Vec<RECT>,
+        stamp: Option<Instant>,
+    }
+
+    static TAB_CACHE: Mutex<TabCache> = Mutex::new(TabCache {
+        hwnd: 0,
+        rects: Vec::new(),
+        stamp: None,
+    });
+
+    // Window yang sedang perlu dipindai: (hwnd, batas bawah strip tab, waktu diminta).
+    static TAB_WANTED: Mutex<Option<(isize, i32, Instant)>> = Mutex::new(None);
 
     const IGNORED_CLASSES: [&str; 5] = [
         "Progman",
@@ -944,7 +978,128 @@ mod caption_avoid {
         TRUE
     }
 
-    // Periksa apakah kursor berada di area kontrol title bar aplikasi lain.
+    fn new_uia() -> Option<IUIAutomation> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()
+        }
+    }
+
+    // Pindai strip atas sebuah window lewat UI Automation dan kumpulkan kotak tab
+    // (TabItem) serta tombol di strip itu (mis. tombol tab baru).
+    // Isi halaman web (Document) tidak ditelusuri supaya pemindaian tetap ringan.
+    unsafe fn scan_tabs(uia: &IUIAutomation, hwnd: HWND, band_bottom: i32) -> Vec<RECT> {
+        let mut out: Vec<RECT> = Vec::new();
+
+        let Ok(root) = uia.ElementFromHandle(hwnd) else {
+            return out;
+        };
+        let Ok(walker) = uia.ControlViewWalker() else {
+            return out;
+        };
+
+        let mut stack = vec![(root, 0u32)];
+        let mut visited = 0u32;
+
+        while let Some((el, depth)) = stack.pop() {
+            let mut child = walker.GetFirstChildElement(&el).ok();
+
+            while let Some(c) = child {
+                visited += 1;
+                if visited > TAB_MAX_NODES {
+                    return out;
+                }
+
+                let next = walker.GetNextSiblingElement(&c).ok();
+                let rect = c.CurrentBoundingRectangle().unwrap_or_default();
+                let ct = c.CurrentControlType().map(|t| t.0).unwrap_or(0);
+                let valid = rect.right > rect.left && rect.bottom > rect.top;
+
+                // Abaikan elemen yang seluruhnya berada di bawah strip tab.
+                if !valid || rect.top < band_bottom {
+                    if valid && ct == UIA_TabItemControlTypeId.0 {
+                        out.push(rect);
+                    } else if valid
+                        && ct == UIA_ButtonControlTypeId.0
+                        && rect.bottom <= band_bottom
+                    {
+                        out.push(rect);
+                    } else if ct != UIA_DocumentControlTypeId.0
+                        && ct != UIA_TabItemControlTypeId.0
+                        && depth + 1 < TAB_MAX_DEPTH
+                    {
+                        stack.push((c.clone(), depth + 1));
+                    }
+                }
+
+                child = next;
+            }
+        }
+
+        out
+    }
+
+    // Pemindai berjalan di thread sendiri supaya loop utama tidak tersendat.
+    fn start_tab_worker() {
+        std::thread::spawn(|| {
+            let Some(uia) = new_uia() else {
+                return;
+            };
+
+            loop {
+                std::thread::sleep(Duration::from_millis(TAB_SCAN_EVERY_MS));
+
+                let wanted = TAB_WANTED.lock().ok().and_then(|g| *g);
+                let Some((raw, band_bottom, at)) = wanted else {
+                    continue;
+                };
+
+                // Tidak ada yang meminta lagi (kursor sudah pergi): berhenti memindai.
+                if at.elapsed() > Duration::from_millis(TAB_CACHE_TTL_MS) {
+                    continue;
+                }
+
+                let rects =
+                    unsafe { scan_tabs(&uia, HWND(raw as *mut c_void), band_bottom) };
+
+                if let Ok(mut cache) = TAB_CACHE.lock() {
+                    *cache = TabCache {
+                        hwnd: raw,
+                        rects,
+                        stamp: Some(Instant::now()),
+                    };
+                }
+            }
+        });
+    }
+
+    // Minta pemindaian window ini (dipanggil saat kursor di strip tab).
+    fn request_tab_scan(hwnd: HWND, band_bottom: i32) {
+        if let Ok(mut wanted) = TAB_WANTED.lock() {
+            *wanted = Some((hwnd.0 as isize, band_bottom, Instant::now()));
+        }
+    }
+
+    // Apakah kursor tepat di atas sebuah tab / tombol tab (berdasarkan hasil pindai).
+    // Tanpa hasil pindai yang segar, anggap tidak ada tab, jadi island tidak disembunyikan.
+    fn tab_under_cursor(hwnd: HWND, pt: &POINT) -> bool {
+        let Ok(cache) = TAB_CACHE.lock() else {
+            return false;
+        };
+
+        if cache.hwnd != hwnd.0 as isize {
+            return false;
+        }
+
+        match cache.stamp {
+            Some(t) if t.elapsed() <= Duration::from_millis(TAB_CACHE_TTL_MS) => {}
+            _ => return false,
+        }
+
+        cache.rects.iter().any(|r| in_rect(pt, r))
+    }
+
+    // Periksa apakah kursor berada di atas tombol title bar atau tab aplikasi lain.
     unsafe fn cursor_over_caption_beneath(
         island: HWND,
         pill_rects: &[RECT],
@@ -981,14 +1136,58 @@ mod caption_avoid {
         let caption_h = (CAPTION_HEIGHT * scale) as i32;
         let controls_w = (CAPTION_CONTROLS_WIDTH * scale) as i32;
 
-        pt.y < rect.top + caption_h && pt.x >= rect.right - controls_w
+        // Tombol minimize / maximize / close.
+        if pt.y < rect.top + caption_h && pt.x >= rect.right - controls_w {
+            return true;
+        }
+
+        // Tab: hanya bila kursor tepat di atas sebuah tab. Area kosong strip tab
+        // tidak membuat island turun.
+        let band_bottom = rect.top + (TAB_BAND_HEIGHT * scale) as i32;
+
+        if pt.y >= band_bottom {
+            return false;
+        }
+
+        request_tab_scan(hwnd, band_bottom);
+        tab_under_cursor(hwnd, &pt)
+    }
+
+    // Island sedang berstatus topmost atau tidak.
+    unsafe fn is_topmost(hwnd: HWND) -> bool {
+        ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32) & WS_EX_TOPMOST.0) != 0
+    }
+
+    // Turunkan island ke dasar z-order. Status topmost dilepas dulu supaya
+    // island benar-benar turun di bawah window aplikasi lain.
+    unsafe fn send_to_back(island: HWND) {
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        let _ = SetWindowPos(island, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        let _ = SetWindowPos(island, HWND_BOTTOM, 0, 0, 0, 0, flags);
+    }
+
+    // Naikkan island kembali ke paling depan. NOTOPMOST -> TOPMOST dipakai agar
+    // island pasti naik ke atas walau bit topmost-nya masih tersisa dari sebelumnya.
+    unsafe fn bring_to_front(island: HWND) {
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        let _ = SetWindowPos(island, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+        let _ = SetWindowPos(island, HWND_TOPMOST, 0, 0, 0, 0, flags);
     }
 
     // Atur posisi island terhadap title bar aplikasi lain.
+    //
+    // Status "di belakang" disimpan sendiri di `behind`, TIDAK dibaca dari style
+    // window. Dulu island hanya dikembalikan bila WS_EX_TOPMOST terbaca mati; kalau
+    // Windows masih menyisakan bit itu setelah HWND_BOTTOM, island tidak pernah
+    // naik lagi sampai aplikasi di bawahnya di-minimize.
     pub fn start(hwnd_raw: isize, app: AppHandle) {
+        start_tab_worker();
+
         std::thread::spawn(move || {
             let island = HWND(hwnd_raw as *mut c_void);
+            let mut behind = false;
             let mut frozen: Vec<RECT> = Vec::new();
+            let mut last_fix = Instant::now();
 
             loop {
                 std::thread::sleep(Duration::from_millis(POLL_MS));
@@ -1004,49 +1203,47 @@ mod caption_avoid {
                 }
 
                 unsafe {
-                    let is_topmost =
-                        ((GetWindowLongPtrW(island, GWL_EXSTYLE) as u32)
-                            & WS_EX_TOPMOST.0)
-                            != 0;
+                    // Island disembunyikan (tray / Spotify): jangan sentuh z-order,
+                    // dan jangan biarkan status "behind" basi tertinggal.
+                    if !IsWindowVisible(island).as_bool() {
+                        if behind {
+                            behind = false;
+                            let _ = app.emit("island-behind", false);
+                        }
+                        continue;
+                    }
 
-                    let pill_rects = if is_topmost {
+                    // Di depan: area pil selalu terbaru.
+                    // Di belakang: pakai area beku, karena pil mengecil saat mini.
+                    let pill_rects = if behind {
+                        frozen.clone()
+                    } else {
                         let current = screen_rects(island);
                         frozen = current.clone();
                         current
-                    } else {
-                        frozen.clone()
                     };
 
                     let want_behind =
                         cursor_over_caption_beneath(island, &pill_rects);
 
-                    if want_behind && is_topmost {
-                        let _ = SetWindowPos(
-                            island,
-                            HWND_BOTTOM,
-                            0,
-                            0,
-                            0,
-                            0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                        );
-
+                    if want_behind && !behind {
+                        send_to_back(island);
+                        behind = true;
                         let _ = app.emit("island-behind", true);
-                    } else if !want_behind && !is_topmost {
-                        let _ = SetWindowPos(
-                            island,
-                            HWND_TOPMOST,
-                            0,
-                            0,
-                            0,
-                            0,
-                            SWP_NOMOVE
-                                | SWP_NOSIZE
-                                | SWP_NOACTIVATE
-                                | SWP_SHOWWINDOW,
-                        );
-
+                    } else if !want_behind && behind {
+                        // Kursor keluar dari tombol title bar (atau tidak jadi klik):
+                        // langsung kembali ke depan.
+                        bring_to_front(island);
+                        behind = false;
                         let _ = app.emit("island-behind", false);
+                        last_fix = Instant::now();
+                    } else if !behind
+                        && !is_topmost(island)
+                        && last_fix.elapsed() >= Duration::from_millis(REASSERT_MS)
+                    {
+                        // Seharusnya di depan tetapi status topmost hilang: pulihkan.
+                        bring_to_front(island);
+                        last_fix = Instant::now();
                     }
                 }
             }
