@@ -60,7 +60,7 @@ const Header: React.FC<{
       disabled={disabled}
       onClick={() => onToggle(!on)}
       className={`relative h-[20px] w-[36px] shrink-0 rounded-full transition-colors duration-150 disabled:opacity-40 ${
-        on ? "bg-sky-400" : "bg-white/20"
+        on ? "bg-[#34C759]" : "bg-white/20"
       } ${ring}`}
     >
       <span

@@ -1,12 +1,5 @@
-/**
- * File: useLocation.ts
- * Kegunaan: Lokasi untuk jadwal salat.
- *   - Lokasi baru dicari setelah halaman jadwal salat / lokasi dibuka (parameter `enabled`),
- *     bukan saat menu pertama dibuka, supaya menu tidak tertahan oleh pencarian GPS.
- *   - GPS presisi tinggi: menunggu fix terbaik (hingga 12 detik), berhenti dini bila akurasi <= 100 m.
- *   - Pilih kota manual (pencarian) untuk hasil paling pasti.
- *   - Perkiraan dari IP hanya cadangan, karena sering menunjuk kantor ISP, bukan posisi Anda.
- */
+// useLocation.ts
+// lokasi untuk jadwal salat (gps, manual, jaringan)
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -15,7 +8,7 @@ export interface GeoLocation {
   lng: number;
   city: string;
   source: "gps" | "manual" | "network" | "default";
-  /** Akurasi GPS dalam meter. */
+  // akurasi gps (meter)
   accuracy?: number;
   at: number;
 }
@@ -38,12 +31,14 @@ const DEFAULT_LOCATION: GeoLocation = {
   at: 0,
 };
 
-// bacaan GPS lebih tua dari ini dianggap cache lama dari sistem dan dibuang
+// posisi gps lebih tua dari ini dibuang
 const STALE_FIX_MS = 20000;
-// GPS dianggap masih segar selama ini; lewat itu diperbarui saat menu dibuka
+// gps dianggap masih segar
 const FRESH_GPS_MS = 2 * 60e3;
 // lokasi jaringan diperbarui bila lebih tua dari ini
 const NETWORK_TTL_MS = 30 * 60e3;
+// jeda sebelum island boleh ditutup lagi setelah dialog izin hilang
+const RELEASE_DELAY_MS = 600;
 
 function load(): GeoLocation {
   try {
@@ -53,7 +48,7 @@ function load(): GeoLocation {
       if (typeof v.lat === "number" && typeof v.lng === "number") return v;
     }
   } catch {
-    /* abaikan */
+    // abaikan
   }
   return DEFAULT_LOCATION;
 }
@@ -62,7 +57,7 @@ function save(loc: GeoLocation) {
   try {
     localStorage.setItem(KEY, JSON.stringify(loc));
   } catch {
-    /* abaikan */
+    // abaikan
   }
 }
 
@@ -78,6 +73,7 @@ async function getJson(url: string, ms = 6000) {
   }
 }
 
+// lokasi dari ip
 async function fromNetwork(): Promise<GeoLocation> {
   const d = await getJson("https://ipwho.is/");
   if (!d.success) throw new Error("Lokasi jaringan tidak ditemukan");
@@ -90,6 +86,7 @@ async function fromNetwork(): Promise<GeoLocation> {
   };
 }
 
+// nama kota dari koordinat
 async function cityName(lat: number, lng: number): Promise<string> {
   try {
     const d = await getJson(
@@ -101,7 +98,7 @@ async function cityName(lat: number, lng: number): Promise<string> {
   }
 }
 
-/** Cari kota/kecamatan untuk dipilih manual. */
+// cari kota manual
 export async function searchPlaces(query: string): Promise<Place[]> {
   const d = await getJson(
     `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=id&format=json`,
@@ -117,8 +114,9 @@ export async function searchPlaces(query: string): Promise<Place[]> {
   }));
 }
 
-/** Pantau GPS dan ambil bacaan segar paling akurat. */
-function readGps(): Promise<GeolocationPosition> {
+// baca gps, ambil yang paling akurat
+// onAnswered dipanggil saat dialog izin sudah dijawab (ada posisi atau error)
+function readGps(onAnswered: () => void): Promise<GeolocationPosition> {
   return new Promise((resolve, reject) => {
     if (!("geolocation" in navigator)) {
       reject(new Error("Geolocation tidak didukung"));
@@ -141,7 +139,8 @@ function readGps(): Promise<GeolocationPosition> {
 
     watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        // buang posisi lama dari cache sistem (lokasi yang pernah dikunjungi)
+        onAnswered();
+        // buang posisi lama dari cache sistem
         if (Date.now() - pos.timestamp > STALE_FIX_MS) return;
         if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
         const acc = pos.coords.accuracy;
@@ -149,7 +148,8 @@ function readGps(): Promise<GeolocationPosition> {
         if (acc <= 50 || (acc <= 150 && waited > 6000)) finish();
       },
       (err) => {
-        // sensor belum siap: tunggu sampai batas waktu
+        onAnswered();
+        // sensor belum siap, tunggu terus
         if (err.code === err.POSITION_UNAVAILABLE) return;
         finish(err);
       },
@@ -159,21 +159,45 @@ function readGps(): Promise<GeolocationPosition> {
   });
 }
 
-async function permissionState(): Promise<PermissionState> {
+// pencarian gps yang sedang jalan
+// tetap lanjut walau menu ditutup, dipakai bersama kalau menu dibuka lagi
+let gpsTask: Promise<GeoLocation> | null = null;
+
+function findGps(onAnswered: () => void): Promise<GeoLocation> {
+  if (!gpsTask) {
+    gpsTask = (async (): Promise<GeoLocation> => {
+      const {
+        latitude: lat,
+        longitude: lng,
+        accuracy,
+      } = (await readGps(onAnswered)).coords;
+      return {
+        lat,
+        lng,
+        city: await cityName(lat, lng),
+        source: "gps",
+        accuracy,
+        at: Date.now(),
+      };
+    })().finally(() => {
+      gpsTask = null;
+    });
+  }
+  return gpsTask;
+}
+
+// status izin lokasi
+async function getPermission(): Promise<PermissionStatus | null> {
   try {
-    const r = await navigator.permissions.query({ name: "geolocation" });
-    return r.state;
+    return await navigator.permissions.query({ name: "geolocation" });
   } catch {
-    return "prompt";
+    return null;
   }
 }
 
-/**
- * onBusy(true) hanya selama dialog izin lokasi bisa muncul, supaya island tidak menutup
- * saat window kehilangan fokus. Bila izin sudah ada, GPS berjalan tanpa menahan island.
- *
- * enabled: pencarian lokasi baru dimulai saat nilainya true (sekali per menu dibuka).
- */
+// onBusy(true) hanya selama dialog izin tampil, supaya island tidak menutup
+// begitu dialog dijawab, island bebas ditutup dan gps lanjut di latar belakang
+// enabled: pencarian dimulai saat true (sekali per menu dibuka)
 export function useLocation(onBusy?: (busy: boolean) => void, enabled = true) {
   const [loc, setLoc] = useState<GeoLocation>(load);
   const [status, setStatus] = useState<LocationStatus>("idle");
@@ -185,29 +209,36 @@ export function useLocation(onBusy?: (busy: boolean) => void, enabled = true) {
     save(next);
   }, []);
 
+  // tombol lokasi (gps)
   const detectGps = useCallback(async () => {
     setStatus("locating");
-    // island ditahan terbuka hanya bila dialog izin mungkin muncul
-    const hold = (await permissionState()) === "prompt";
-    if (hold) busyRef.current?.(true);
+
+    const perm = await getPermission();
+    let held = (perm?.state ?? "prompt") === "prompt";
+
+    // lepas penahan island
+    const release = () => {
+      if (!held) return;
+      held = false;
+      window.setTimeout(() => busyRef.current?.(false), RELEASE_DELAY_MS);
+    };
+
+    // tahan island selama dialog izin tampil
+    if (held) {
+      busyRef.current?.(true);
+      if (perm) {
+        perm.onchange = () => {
+          if (perm.state !== "prompt") release();
+        };
+      }
+    }
+
     try {
-      const {
-        latitude: lat,
-        longitude: lng,
-        accuracy,
-      } = (await readGps()).coords;
-      apply({
-        lat,
-        lng,
-        city: await cityName(lat, lng),
-        source: "gps",
-        accuracy,
-        at: Date.now(),
-      });
+      apply(await findGps(release));
       setStatus("idle");
     } catch {
       setStatus("gps-failed");
-      // jaringan hanya bila belum pernah ada lokasi yang dipilih / dari GPS
+      // jaringan hanya bila belum ada lokasi dari gps / manual
       const c = load();
       if (c.source === "default" || c.source === "network") {
         fromNetwork()
@@ -215,10 +246,12 @@ export function useLocation(onBusy?: (busy: boolean) => void, enabled = true) {
           .catch(() => {});
       }
     } finally {
-      if (hold) window.setTimeout(() => busyRef.current?.(false), 600);
+      if (perm) perm.onchange = null;
+      release();
     }
   }, [apply]);
 
+  // pilih lokasi manual
   const setManual = useCallback(
     (p: Place) => {
       apply({
@@ -233,7 +266,7 @@ export function useLocation(onBusy?: (busy: boolean) => void, enabled = true) {
     [apply],
   );
 
-  // setelah halaman jadwal salat dibuka: perbarui lokasi dari GPS kecuali dipilih manual
+  // mulai cari lokasi sekali per menu dibuka
   const startedRef = useRef(false);
 
   useEffect(() => {
@@ -244,7 +277,8 @@ export function useLocation(onBusy?: (busy: boolean) => void, enabled = true) {
     if (cached.source === "manual") return;
 
     void (async () => {
-      if ((await permissionState()) === "denied") {
+      // izin ditolak, pakai jaringan
+      if ((await getPermission())?.state === "denied") {
         if (Date.now() - cached.at > NETWORK_TTL_MS) {
           fromNetwork()
             .then(apply)
@@ -252,18 +286,19 @@ export function useLocation(onBusy?: (busy: boolean) => void, enabled = true) {
         }
         return;
       }
+      // gps masih segar, tidak perlu cari lagi
       if (cached.source === "gps" && Date.now() - cached.at < FRESH_GPS_MS)
         return;
       void detectGps();
     })();
   }, [enabled, apply, detectGps]);
 
-  // keluar dari halaman lokasi: lepas penahan island
+  // keluar dari halaman lokasi, lepas penahan island
   useEffect(() => {
     if (!enabled) busyRef.current?.(false);
   }, [enabled]);
 
-  // menu ditutup: pastikan penahan island terlepas
+  // menu ditutup, lepas penahan island
   useEffect(() => () => busyRef.current?.(false), []);
 
   return { loc, status, detectGps, setManual };

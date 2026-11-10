@@ -3,8 +3,6 @@ import { AnimatePresence, motion, useDragControls } from "framer-motion";
 import type { PanInfo } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  ChevronLeft,
-  ChevronRight,
   Crosshair,
   Loader2,
   Lock,
@@ -30,6 +28,7 @@ import chooseSound from "../../../assets/sounds/choose.wav";
 import dropSound from "../../../assets/sounds/drop.wav";
 import { getPrayerState } from "./prayer";
 import { PrayerView } from "./PrayerUi";
+import { CalendarView } from "./CalendarUi";
 import { GeoLocation, Place, searchPlaces, useLocation } from "./useLocation";
 import { usePrayerSchedule } from "./usePrayerSchedule";
 import { stopwatch, useStopwatchRunning } from "./stopwatchStore";
@@ -44,22 +43,6 @@ interface IslandMenuProps {
   /** Status dialog izin lokasi. */
   onBusyChange: (busy: boolean) => void;
 }
-
-const DAYS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
-const MONTHS = [
-  "Januari",
-  "Februari",
-  "Maret",
-  "April",
-  "Mei",
-  "Juni",
-  "Juli",
-  "Agustus",
-  "September",
-  "Oktober",
-  "November",
-  "Desember",
-];
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -406,104 +389,6 @@ const LocateView: React.FC<{
             )}
           </div>
         )}
-      </div>
-    </div>
-  );
-};
-
-// Kalender.
-
-const CalendarView: React.FC<{ now: Date; onBack: () => void }> = ({
-  now,
-  onBack,
-}) => {
-  const [cursor, setCursor] = useState({
-    y: now.getFullYear(),
-    m: now.getMonth(),
-  });
-
-  const shift = (delta: number) =>
-    setCursor(({ y, m }) => {
-      const d = new Date(y, m + delta, 1);
-      return { y: d.getFullYear(), m: d.getMonth() };
-    });
-
-  // Menentukan susunan tanggal kalender.
-  const offset = (new Date(cursor.y, cursor.m, 1).getDay() + 6) % 7;
-  const total = new Date(cursor.y, cursor.m + 1, 0).getDate();
-  const cells: (number | null)[] = [
-    ...Array<null>(offset).fill(null),
-    ...Array.from({ length: total }, (_, i) => i + 1),
-  ];
-  while (cells.length % 7 !== 0) cells.push(null);
-
-  const isToday = (d: number) =>
-    d === now.getDate() &&
-    cursor.m === now.getMonth() &&
-    cursor.y === now.getFullYear();
-
-  const navBtn = `flex h-[26px] w-[26px] items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white ${ring}`;
-
-  return (
-    <div className="flex h-full w-full flex-col gap-2 p-[18px]">
-      <Header
-        onBack={onBack}
-        title={
-          <button
-            type="button"
-            title="Kembali ke bulan ini"
-            onClick={() =>
-              setCursor({ y: now.getFullYear(), m: now.getMonth() })
-            }
-            className={`truncate rounded-md text-[13px] font-semibold ${ring}`}
-          >
-            {MONTHS[cursor.m]} {cursor.y}
-          </button>
-        }
-        right={
-          <div className="flex shrink-0 items-center">
-            <button
-              type="button"
-              aria-label="Bulan sebelumnya"
-              onClick={() => shift(-1)}
-              className={navBtn}
-            >
-              <ChevronLeft size={15} />
-            </button>
-            <button
-              type="button"
-              aria-label="Bulan berikutnya"
-              onClick={() => shift(1)}
-              className={navBtn}
-            >
-              <ChevronRight size={15} />
-            </button>
-          </div>
-        }
-      />
-
-      <div className="grid grid-cols-7 text-center text-[10px] text-white/40">
-        {[...DAYS.slice(1), DAYS[0]].map((d) => (
-          <div key={d}>{d}</div>
-        ))}
-      </div>
-
-      <div className="grid flex-1 grid-cols-7 content-start text-center text-[12px] tabular-nums">
-        {cells.map((d, i) => (
-          <div key={i} className="flex h-7 items-center justify-center">
-            {d !== null && (
-              <span
-                className={`flex h-6 w-6 items-center justify-center rounded-full ${
-                  isToday(d)
-                    ? "bg-white font-semibold text-black"
-                    : "text-white/80"
-                }`}
-              >
-                {d}
-              </span>
-            )}
-          </div>
-        ))}
       </div>
     </div>
   );
