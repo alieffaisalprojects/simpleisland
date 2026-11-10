@@ -6,7 +6,7 @@
 //!
 //! Command Tauri:
 //!   settings_get()            -> pengaturan saat ini
-//!   settings_save(settings)   -> simpan + terapkan (island on/off, autostart), lalu
+//!   settings_save(patch)      -> gabungkan perubahan + terapkan (island on/off, autostart), lalu
 //!                                kirim event "settings-changed" ke semua window
 //!   settings_recenter()       -> pusatkan ulang island
 //!   settings_quit()           -> keluar dari aplikasi
@@ -330,31 +330,55 @@ fn apply_change(app: &AppHandle, next: Settings) -> Result<Settings, String> {
     Ok(next)
 }
 
-pub fn set_island_enabled(app: &AppHandle, on: bool) {
-    let mut s = current(app);
-    s.island_enabled = on;
+// Gabungkan perubahan parsial ke pengaturan saat ini, lalu terapkan.
+// Hanya kunci yang dikirim yang berubah, jadi data basi dari jendela
+// Pengaturan tidak menimpa perubahan dari tray (dan sebaliknya).
+fn apply_patch(app: &AppHandle, patch: serde_json::Value) -> Result<Settings, String> {
+    let prev = current(app);
 
-    if let Err(e) = apply_change(app, s) {
-        eprintln!("Gagal mengubah status island: {e}");
+    let mut value = serde_json::to_value(&prev).map_err(|e| e.to_string())?;
+
+    if let (Some(base), Some(extra)) = (value.as_object_mut(), patch.as_object()) {
+        for (k, v) in extra {
+            base.insert(k.clone(), v.clone());
+        }
     }
+
+    let next = serde_json::from_value::<Settings>(value).map_err(|e| e.to_string())?;
+    apply_change(app, next)
+}
+
+// Tray dan jendela Pengaturan sama-sama lewat main thread, jadi urut dan tidak saling balapan
+fn queue_patch(app: &AppHandle, patch: serde_json::Value) {
+    let handle = app.clone();
+
+    let queued = app.run_on_main_thread(move || {
+        if let Err(e) = apply_patch(&handle, patch) {
+            eprintln!("Gagal menerapkan pengaturan: {e}");
+        }
+    });
+
+    if let Err(e) = queued {
+        eprintln!("Gagal menjadwalkan pengaturan: {e}");
+    }
+}
+
+pub fn set_island_enabled(app: &AppHandle, on: bool) {
+    queue_patch(app, serde_json::json!({ "islandEnabled": on }));
 }
 
 pub fn set_autostart(app: &AppHandle, on: bool) {
-    let mut s = current(app);
-    s.autostart = on;
-
-    if let Err(e) = apply_change(app, s) {
-        eprintln!("Gagal mengubah auto startup: {e}");
-    }
+    queue_patch(app, serde_json::json!({ "autostart": on }));
 }
 
-// Aplikasi dijalankan lagi (mis. klik ganda exe saat sudah berjalan)
+// Aplikasi dijalankan lagi (klik shortcut saat sudah berjalan): selalu buka Pengaturan
 pub fn on_relaunch(app: &AppHandle) {
+    // island tetap tampil bila aktif
     if is_enabled() {
         super::show_island(app);
-    } else {
-        open_settings(app);
     }
+
+    open_settings(app);
 }
 
 // Buka (atau fokuskan) jendela Pengaturan.
@@ -401,8 +425,27 @@ pub fn settings_get(app: AppHandle) -> Settings {
 }
 
 #[tauri::command]
-pub async fn settings_save(app: AppHandle, settings: Settings) -> Result<Settings, String> {
-    apply_change(&app, settings)
+pub async fn settings_save(
+    app: AppHandle,
+    settings: serde_json::Value,
+) -> Result<Settings, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = app.clone();
+
+    app.run_on_main_thread(move || {
+        let result = apply_patch(&handle, settings);
+
+        // kembalikan fokus ke jendela Pengaturan (island baru tampil bisa merebut fokus)
+        if let Some(window) = handle.get_webview_window(SETTINGS_LABEL) {
+            let _ = window.set_focus();
+        }
+
+        let _ = tx.send(result);
+    })
+    .map_err(|e| e.to_string())?;
+
+    rx.await
+        .map_err(|_| "Gagal menerapkan pengaturan".to_string())?
 }
 
 #[tauri::command]
