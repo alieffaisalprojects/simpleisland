@@ -26,7 +26,7 @@ export const ISLAND_TOP = 6;
 export const IDLE_AFTER_PAUSE_MS = 2000;
 
 // jarak pil utama ke pil kedua
-export const SPLIT_GAP = 14;
+export const SPLIT_GAP = 10;
 
 // padding area klik
 export const HIT_PAD = 4;
@@ -106,9 +106,9 @@ export const SEC_CONTENT_ENTER: Transition = {
 // ---- HUD volume ----
 
 // ukuran HUD
-export const HUD_W = 30;
+export const HUD_W = 18;
 export const HUD_H = 116;
-export const HUD_PAD = 7;
+export const HUD_PAD = 4;
 
 // gundukan
 export const BUMP_H = 38;

@@ -306,13 +306,144 @@ function useLivePosition(track: SpotifyTrack) {
   return { trackRef, getPosition };
 }
 
-// Mengatur warna spektrum musik
-const spectrumStyle = (palette: string[]) =>
-  ({
-    "--spectrum-a": palette[0] ?? "#aeb4c0",
-    "--spectrum-b": palette[1] ?? "#777f8c",
-    "--spectrum-c": palette[2] ?? "#d4d7de",
-  }) as React.CSSProperties;
+// ---- Palet spektrum: warna dibuat cerah dan hidup (seperti iPhone) ----
+
+// Luminans relatif (0..1) sesuai persepsi mata: merah dan biru terlihat lebih gelap dari hijau
+const srgbToLinear = (value: number) => {
+  const s = value / 255;
+  return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+};
+
+const relativeLuminance = (r: number, g: number, b: number) =>
+  0.2126 * srgbToLinear(r) +
+  0.7152 * srgbToLinear(g) +
+  0.0722 * srgbToLinear(b);
+
+// Membaca "#rrggbb" atau "rgb(r, g, b)"
+function parseRgb(color: string): [number, number, number] | null {
+  const hex = color.trim().match(/^#([0-9a-f]{6})$/i);
+
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  const rgb = color.match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+  return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : null;
+}
+
+// RGB (0..255) ke HSL (h 0..360, s dan l 0..1)
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const rn = r / 255,
+    gn = g / 255,
+    bn = b / 255;
+
+  const max = Math.max(rn, gn, bn),
+    min = Math.min(rn, gn, bn);
+
+  const l = (max + min) / 2;
+  const d = max - min;
+
+  if (d === 0) return [0, 0, l];
+
+  const s = d / (1 - Math.abs(2 * l - 1));
+
+  let h: number;
+  if (max === rn) h = ((gn - bn) / d) % 6;
+  else if (max === gn) h = (bn - rn) / d + 2;
+  else h = (rn - gn) / d + 4;
+
+  return [(h * 60 + 360) % 360, s, l];
+}
+
+// HSL ke RGB (0..255)
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+
+  let r = 0,
+    g = 0,
+    b = 0;
+
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+
+  return [
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255),
+  ];
+}
+
+// Terangkan warna sampai cukup terlihat di atas island hitam, tanpa mengubah hue-nya.
+// minLum = luminans minimum yang dituju (merah dan biru butuh lightness lebih tinggi
+// daripada kuning atau hijau untuk terlihat sama terang).
+function brightenColor(color: string, minLum: number): string {
+  const rgb = parseRgb(color);
+  if (!rgb) return color;
+
+  let [h, s, l] = rgbToHsl(rgb[0], rgb[1], rgb[2]);
+
+  if (s < 0.12) {
+    // Abu-abu / hitam putih: jadikan abu terang yang bersih
+    s = 0;
+    l = Math.min(0.9, Math.max(l, 0.7));
+  } else {
+    // Warna berwarna: jaga tetap hidup (tidak pucat), lalu naikkan lightness
+    // sampai luminansnya cukup. Batas 0.82 supaya tidak berubah jadi pastel putih.
+    s = Math.min(1, Math.max(s, 0.62));
+    l = Math.max(l, 0.44);
+
+    while (l < 0.82) {
+      const [r, g, b] = hslToRgb(h, s, l);
+      if (relativeLuminance(r, g, b) >= minLum) break;
+      l += 0.01;
+    }
+  }
+
+  const [r, g, b] = hslToRgb(h, s, l);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+const vibrantCache = new Map<string, string[]>();
+
+// Palet khusus spektrum: tiga warna yang sudah dicerahkan.
+// a = warna utama, b = sedikit lebih dalam, c = lebih terang (untuk gradien bar).
+function vibrantPalette(palette: string[]): string[] {
+  // Warna cadangan abu-abu dibiarkan apa adanya
+  if (palette === FALLBACK_PALETTE || palette.length === 0) return palette;
+
+  const key = palette.join("|");
+  const cached = vibrantCache.get(key);
+  if (cached) return cached;
+
+  const result = [
+    brightenColor(palette[0], 0.26),
+    brightenColor(palette[1] ?? palette[0], 0.2),
+    brightenColor(palette[2] ?? palette[0], 0.34),
+  ];
+
+  if (vibrantCache.size > 60) vibrantCache.clear();
+  vibrantCache.set(key, result);
+
+  return result;
+}
+
+// Mengatur warna spektrum musik (warna album dicerahkan dulu agar tidak gelap)
+const spectrumStyle = (palette: string[]) => {
+  const vivid = vibrantPalette(palette);
+
+  return {
+    "--spectrum-a": vivid[0] ?? "#aeb4c0",
+    "--spectrum-b": vivid[1] ?? "#777f8c",
+    "--spectrum-c": vivid[2] ?? "#d4d7de",
+  } as React.CSSProperties;
+};
 
 // ---- Spektrum audio asli ----
 
@@ -658,6 +789,153 @@ const SkipButton: React.FC<{
   );
 };
 
+// ---- Sumber media: musik atau video ----
+
+// Lompatan tombol maju/mundur saat yang diputar adalah video (detik).
+// 10 = sama seperti tombol J (mundur) dan L (maju) di YouTube.
+export const VIDEO_SKIP_SECONDS = 10;
+
+type MediaSourceKind = "music" | "video";
+
+// Payload event "media-source-update" dari Rust
+interface MediaSourcePayload {
+  kind: MediaSourceKind;
+  app: string;
+}
+
+const mediaSourceStore = {
+  kind: "music" as MediaSourceKind,
+  listening: false,
+  subscribers: new Set<(kind: MediaSourceKind) => void>(),
+};
+
+// Pendengar event dipasang sekali saja dan tidak dilepas
+function ensureMediaSourceListener() {
+  if (mediaSourceStore.listening) return;
+  mediaSourceStore.listening = true;
+
+  listen<MediaSourcePayload>("media-source-update", (event) => {
+    const payload = event.payload;
+
+    // Tidak ada sesi media: pertahankan jenis terakhir supaya tombol tidak berkedip
+    if (!payload || !payload.app) return;
+
+    const next: MediaSourceKind = payload.kind === "video" ? "video" : "music";
+    if (next === mediaSourceStore.kind) return;
+
+    mediaSourceStore.kind = next;
+    mediaSourceStore.subscribers.forEach((notify) => notify(next));
+  }).catch((error) => {
+    mediaSourceStore.listening = false;
+    console.debug("media-source-update listener failed:", error);
+  });
+}
+
+// Jenis media yang sedang diputar. Tanpa backend baru, hasilnya tetap "music"
+function useMediaSourceKind(): MediaSourceKind {
+  const [kind, setKind] = useState<MediaSourceKind>(mediaSourceStore.kind);
+
+  useEffect(() => {
+    ensureMediaSourceListener();
+    mediaSourceStore.subscribers.add(setKind);
+    setKind(mediaSourceStore.kind);
+
+    return () => {
+      mediaSourceStore.subscribers.delete(setKind);
+    };
+  }, []);
+
+  return kind;
+}
+
+// Panah melingkar ala iOS (gobackward / goforward), digambar untuk arah maju.
+// Lingkaran terbuka 300° dengan celah di atas; ujung panah ada di sisi kiri celah.
+const SEEK_ARC = "M21.50 6.47A11 11 0 1 1 10.50 6.47";
+const SEEK_HEAD = "M10.86 10.30L12.58 5.27L7.36 4.24";
+
+// Pegas putaran panah: berputar satu lingkaran penuh lalu berhenti halus
+const SEEK_SPIN = {
+  type: "spring",
+  stiffness: 150,
+  damping: 19,
+  mass: 0.9,
+} as const;
+
+// Tombol maju / mundur beberapa detik untuk video, dengan panah yang berputar ala iOS
+const SeekButton: React.FC<{
+  direction: "back" | "forward";
+  seconds: number;
+  label: string;
+  onPress: () => void;
+}> = ({ direction, seconds, label, onPress }) => {
+  // Sudut putaran panah (derajat), naik 360 setiap klik supaya klik cepat tetap mulus
+  const rotation = useMotionValue(0);
+  const target = useRef(0);
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    target.current += 360;
+    animate(rotation, target.current, SEEK_SPIN);
+
+    onPress();
+  };
+
+  return (
+    <motion.button
+      type="button"
+      aria-label={label}
+      onClick={handleClick}
+      onMouseDown={(e) => e.preventDefault()}
+      className="relative inline-flex h-[30px] w-[30px] items-center justify-center text-white/90 hover:text-white focus:outline-none"
+      variants={skipButtonVariants}
+      initial="rest"
+      animate="rest"
+      whileTap="pressed"
+    >
+      {/* Lingkaran highlight saat ditekan */}
+      <motion.span
+        className="pointer-events-none absolute -inset-[7px] rounded-full bg-white/[0.16]"
+        variants={skipHighlightVariants}
+      />
+
+      {/* Untuk mundur, panah dicerminkan: putaran positif jadi berlawanan arah jarum jam */}
+      <span
+        className="pointer-events-none absolute inset-0"
+        style={{ transform: direction === "back" ? "scaleX(-1)" : undefined }}
+      >
+        <motion.span
+          className="absolute inset-0 flex items-center justify-center"
+          style={{ rotate: rotation }}
+        >
+          <svg
+            width="30"
+            height="30"
+            viewBox="0 0 32 32"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2.3}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path d={SEEK_ARC} />
+            <path d={SEEK_HEAD} />
+          </svg>
+        </motion.span>
+      </span>
+
+      {/* Angka di tengah tidak ikut berputar */}
+      <span
+        className="pointer-events-none relative text-[10.5px] font-bold leading-none tabular-nums"
+        style={{ paddingTop: 1 }}
+      >
+        {seconds}
+      </span>
+    </motion.button>
+  );
+};
+
 // Konten bergeser ke kiri / kembali
 const VOLUME_SHIFT_SPRING = {
   type: "spring",
@@ -751,6 +1029,132 @@ const VolumeButton: React.FC<{
   );
 };
 
+// ---- Teks berjalan (judul panjang) ----
+
+// Kecepatan geser (px per detik): pelan
+const MARQUEE_SPEED = 26;
+
+// Diam dulu setelah island dibuka / judul berganti (ms)
+const MARQUEE_START_DELAY = 1800;
+
+// Diam sebentar di awal setiap putaran berikutnya (ms)
+const MARQUEE_LOOP_DELAY = 1400;
+
+// Jarak antara akhir teks dan salinan berikutnya (px)
+const MARQUEE_GAP = 36;
+
+// Teks satu baris. Muat -> diam. Terlalu panjang -> diam sebentar, lalu berjalan
+// pelan ke kiri berulang-ulang, dengan tepi kiri/kanan memudar
+const MarqueeText: React.FC<{ text: string; className?: string }> = ({
+  text,
+  className = "",
+}) => {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
+  const x = useMotionValue(0);
+
+  const [textWidth, setTextWidth] = useState(0);
+  const [overflow, setOverflow] = useState(false);
+  const [moving, setMoving] = useState(false);
+
+  // Ukur teks dan wadah. Diukur ulang saat ukuran berubah (mis. panel volume dibuka)
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    const el = textRef.current;
+    if (!box || !el) return;
+
+    const measure = () => {
+      const width = el.offsetWidth;
+      setTextWidth(width);
+      setOverflow(width > box.clientWidth + 1);
+    };
+
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    observer.observe(el);
+
+    return () => observer.disconnect();
+  }, [text]);
+
+  // Jalankan: diam -> geser satu putaran -> diam -> ulangi
+  useEffect(() => {
+    x.set(0);
+    setMoving(false);
+
+    if (!overflow || textWidth <= 0) return;
+
+    const distance = textWidth + MARQUEE_GAP;
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let controls: { stop: () => void } | undefined;
+
+    const cycle = (delay: number) => {
+      timer = window.setTimeout(() => {
+        if (cancelled) return;
+
+        setMoving(true);
+
+        controls = animate(x, -distance, {
+          duration: distance / MARQUEE_SPEED,
+          ease: "linear",
+          onComplete: () => {
+            if (cancelled) return;
+
+            // Salinan kedua kini tepat di posisi awal, jadi reset tidak terlihat
+            x.set(0);
+            setMoving(false);
+            cycle(MARQUEE_LOOP_DELAY);
+          },
+        });
+      }, delay);
+    };
+
+    cycle(MARQUEE_START_DELAY);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controls?.stop();
+      x.set(0);
+    };
+  }, [overflow, textWidth, text, x]);
+
+  // Tepi kanan selalu memudar saat teks terpotong; tepi kiri hanya saat bergerak
+  const mask = !overflow
+    ? undefined
+    : moving
+      ? "linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 16px), transparent 100%)"
+      : "linear-gradient(to right, #000 calc(100% - 16px), transparent 100%)";
+
+  return (
+    <div
+      ref={boxRef}
+      className={`relative overflow-hidden whitespace-nowrap ${className}`}
+      style={{ maskImage: mask, WebkitMaskImage: mask }}
+    >
+      <motion.div className="flex w-max" style={{ x }}>
+        <span ref={textRef} className="shrink-0">
+          {text}
+        </span>
+
+        {/* Salinan kedua agar putaran tersambung mulus */}
+        {overflow && (
+          <span
+            aria-hidden
+            className="shrink-0"
+            style={{ paddingLeft: MARQUEE_GAP }}
+          >
+            {text}
+          </span>
+        )}
+      </motion.div>
+    </div>
+  );
+};
+
 // Tampilan Spotify compact
 const CompactView: React.FC<{
   track: SpotifyTrack;
@@ -781,6 +1185,7 @@ const CompactView: React.FC<{
 const ExpandedView: React.FC<{
   track: SpotifyTrack;
   palette: string[];
+  sourceKind: MediaSourceKind;
   runCommand: (command: MediaCommand) => void;
   onSeek: (positionSecs: number) => void;
   onOpenLyrics: () => void;
@@ -789,6 +1194,7 @@ const ExpandedView: React.FC<{
 }> = ({
   track,
   palette,
+  sourceKind,
   runCommand,
   onSeek,
   onOpenLyrics,
@@ -809,6 +1215,29 @@ const ExpandedView: React.FC<{
 
   // Posisi lagu realtime
   const { trackRef, getPosition } = useLivePosition(track);
+
+  // Lompat maju / mundur beberapa detik (dipakai saat yang diputar adalah video)
+  const lastSkip = useRef<{ at: number; target: number } | null>(null);
+
+  const skipBy = useCallback(
+    (deltaSecs: number) => {
+      const duration = Math.max(0, trackRef.current.durationSecs || 0);
+
+      // Siaran langsung / durasi tidak diketahui: tidak bisa dilompati
+      if (duration <= 0) return;
+
+      // Klik beruntun: lanjutkan dari target terakhir, bukan dari posisi lama yang belum tersinkron
+      const last = lastSkip.current;
+      const base =
+        last && performance.now() - last.at < 800 ? last.target : getPosition();
+
+      const target = clamp(base + deltaSecs, 0, duration);
+
+      lastSkip.current = { at: performance.now(), target };
+      onSeek(target);
+    },
+    [getPosition, onSeek, trackRef],
+  );
 
   // Ref progress bar
   const barRef = useRef<HTMLDivElement>(null);
@@ -1066,9 +1495,21 @@ const ExpandedView: React.FC<{
 
         {/* Kontainer informasi lagu */}
         <div className="min-w-0 flex-1">
-          {/* Judul lagu */}
-          <div className="truncate text-[15px] font-semibold leading-[1.2] tracking-[-0.035em] text-white">
-            {track.title || "Memutar Musik..."}
+          {/* Judul lagu + spektrum, satu baris (spektrum sejajar judul) */}
+          <div className="flex items-center gap-2.5">
+            <MarqueeText
+              text={track.title || "Memutar Musik..."}
+              className="min-w-0 flex-1 text-[15px] font-semibold leading-[1.2] tracking-[-0.035em] text-white"
+            />
+
+            {/* Tinggi sama dengan satu baris judul (15px x 1.2 = 18px) */}
+            <div className="flex h-[18px] shrink-0 items-center">
+              <Spectrum
+                playing={track.isPlaying}
+                palette={palette}
+                extraClass="expanded-spectrum "
+              />
+            </div>
           </div>
 
           {/* Nama artis */}
@@ -1076,18 +1517,11 @@ const ExpandedView: React.FC<{
             role="button"
             onClick={openArtist}
             onMouseDown={(e) => e.preventDefault()}
-            className="mt-1 cursor-pointer truncate text-[12px] font-medium tracking-[-0.01em] text-white/55 transition hover:text-white"
+            className="mt-1 cursor-pointer truncate text-[12px] font-normal tracking-[-0.01em] text-white/55 transition hover:text-white"
           >
             {track.artist || "Unknown Artist"}
           </div>
         </div>
-
-        {/* Spektrum musik */}
-        <Spectrum
-          playing={track.isPlaying}
-          palette={palette}
-          extraClass="expanded-spectrum "
-        />
       </motion.div>
 
       {/* Kontainer progress lagu: waktu kiri | bar | waktu kanan */}
@@ -1097,10 +1531,12 @@ const ExpandedView: React.FC<{
         animate={{ paddingRight: volumeOpen ? VOLUME_COL_SHIFT : 0 }}
         transition={VOLUME_SHIFT_SPRING}
       >
-        {/* Waktu berjalan (kiri) */}
+        {/* Waktu berjalan (kiri): abu-abu, putih saat progress digeser */}
         <span
           ref={elapsedRef}
-          className="min-w-[34px] text-left text-[13px] font-semibold leading-none tabular-nums tracking-[-0.01em] text-white/90"
+          className={`min-w-[34px] text-left text-[13px] font-normal leading-none tabular-nums tracking-[-0.01em] transition-colors duration-150 ${
+            scrubbing ? "text-white" : "text-white/55"
+          }`}
         >
           0:00
         </span>
@@ -1133,10 +1569,12 @@ const ExpandedView: React.FC<{
           </div>
         </div>
 
-        {/* Sisa waktu (kanan) */}
+        {/* Sisa waktu (kanan): abu-abu, putih saat progress digeser */}
         <span
           ref={remainingRef}
-          className="min-w-[34px] text-right text-[13px] font-semibold leading-none tabular-nums tracking-[-0.01em] text-white/90"
+          className={`min-w-[34px] text-right text-[13px] font-normal leading-none tabular-nums tracking-[-0.01em] transition-colors duration-150 ${
+            scrubbing ? "text-white" : "text-white/55"
+          }`}
         >
           --:--
         </span>
@@ -1159,12 +1597,21 @@ const ExpandedView: React.FC<{
 
         {/* Tombol kontrol lagu */}
         <div className="flex items-center gap-[34px]">
-          {/* Tombol lagu sebelumnya */}
-          <SkipButton
-            direction="prev"
-            label="Previous track"
-            onPress={() => runCommand("media_previous")}
-          />
+          {/* Musik: lagu sebelumnya. Video: mundur beberapa detik */}
+          {sourceKind === "video" ? (
+            <SeekButton
+              direction="back"
+              seconds={VIDEO_SKIP_SECONDS}
+              label={`Mundur ${VIDEO_SKIP_SECONDS} detik`}
+              onPress={() => skipBy(-VIDEO_SKIP_SECONDS)}
+            />
+          ) : (
+            <SkipButton
+              direction="prev"
+              label="Previous track"
+              onPress={() => runCommand("media_previous")}
+            />
+          )}
 
           {/* Tombol play dan pause */}
           <button
@@ -1188,12 +1635,21 @@ const ExpandedView: React.FC<{
             )}
           </button>
 
-          {/* Tombol lagu berikutnya */}
-          <SkipButton
-            direction="next"
-            label="Next track"
-            onPress={() => runCommand("media_next")}
-          />
+          {/* Musik: lagu berikutnya. Video: maju beberapa detik */}
+          {sourceKind === "video" ? (
+            <SeekButton
+              direction="forward"
+              seconds={VIDEO_SKIP_SECONDS}
+              label={`Maju ${VIDEO_SKIP_SECONDS} detik`}
+              onPress={() => skipBy(VIDEO_SKIP_SECONDS)}
+            />
+          ) : (
+            <SkipButton
+              direction="next"
+              label="Next track"
+              onPress={() => runCommand("media_next")}
+            />
+          )}
         </div>
 
         {/* Tombol membuka panel volume (kanan bawah, selebar tombol lirik) */}
@@ -1452,6 +1908,9 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
   // Mengambil warna album
   const palette = useAlbumPalette(track.albumArt);
 
+  // Musik atau video yang sedang diputar (menentukan jenis tombol prev/next)
+  const sourceKind = useMediaSourceKind();
+
   // Mengambil posisi lagu realtime
   const { getPosition } = useLivePosition(track);
 
@@ -1599,6 +2058,7 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
                   <ExpandedView
                     track={track}
                     palette={palette}
+                    sourceKind={sourceKind}
                     runCommand={runCommand}
                     onSeek={handleSeek}
                     onOpenLyrics={() => onLyricsModeChange?.(true)}

@@ -392,6 +392,228 @@ struct MediaInfo {
     duration_secs: f64,
 }
 
+// ---------------------------------------------------------------------------
+// Jenis sumber media: musik (Spotify, dll.) atau video (YouTube, dll.)
+// ---------------------------------------------------------------------------
+
+// Dikirim ke frontend lewat event "media-source-update".
+// kind = "music" -> tombol next/prev lagu; kind = "video" -> tombol maju/mundur detik.
+#[derive(Clone, serde::Serialize)]
+struct MediaSourceInfo {
+    kind: &'static str,
+    app: String,
+}
+
+// Aplikasi yang pasti hanya memutar musik (dicocokkan dengan AppUserModelId, huruf kecil).
+#[cfg(windows)]
+const MUSIC_APPS: &[&str] = &[
+    "spotify",
+    "applemusic",
+    "itunes",
+    "tidal",
+    "deezer",
+    "amazonmusic",
+    "foobar",
+    "musicbee",
+    "winamp",
+    "aimp",
+    "soundcloud",
+    "pandora",
+    "qobuz",
+    "yandexmusic",
+    "resso",
+    "youtubemusic",
+    "ytmdesktop",
+];
+
+// Aplikasi yang pasti memutar video.
+#[cfg(windows)]
+const VIDEO_APPS: &[&str] = &[
+    "netflix",
+    "primevideo",
+    "disneyplus",
+    "hbomax",
+    "zunevideo",
+    "mpc-hc",
+    "mpc-be",
+    "potplayer",
+    "kmplayer",
+    "stremio",
+];
+
+// Browser: bisa memutar video (YouTube) maupun musik (YouTube Music, Spotify Web).
+#[cfg(windows)]
+const BROWSER_APPS: &[&str] = &[
+    "chrome",
+    "msedge",
+    "microsoftedge",
+    "firefox",
+    "brave",
+    "opera",
+    "vivaldi",
+    "iexplore",
+    "thorium",
+    "librewolf",
+    "waterfox",
+];
+
+// Pemutar serbaguna: musik atau video, dibedakan dari ada tidaknya info album.
+#[cfg(windows)]
+const MIXED_PLAYERS: &[&str] = &["vlc", "zunemusic"];
+
+// Firefox memakai AppUserModelId berupa 16 karakter hex, bukan nama aplikasi.
+#[cfg(windows)]
+fn looks_like_hash_id(id: &str) -> bool {
+    id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+// Petunjuk dari judul window browser: "... - YouTube Music" -> musik, "... - YouTube" -> video.
+#[cfg(windows)]
+mod source_hint {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextW, IsWindowVisible,
+    };
+
+    // Kata di judul window yang menandakan situs musik.
+    const MUSIC_SITES: &[&str] = &[
+        "youtube music",
+        "spotify",
+        "soundcloud",
+        "deezer",
+        "tidal",
+        "apple music",
+        "amazon music",
+        "pandora",
+        "bandcamp",
+        "joox",
+    ];
+
+    // Kata di judul window yang menandakan situs video.
+    const VIDEO_SITES: &[&str] = &[
+        "youtube",
+        "netflix",
+        "twitch",
+        "vimeo",
+        "disney",
+        "prime video",
+        "hbo",
+        "vidio",
+        "wetv",
+        "viu",
+        "iqiyi",
+        "bilibili",
+        "dailymotion",
+        "tiktok",
+        "facebook",
+        "hotstar",
+        "crunchyroll",
+    ];
+
+    struct Search {
+        needle: String,
+        hits: Vec<String>,
+    }
+
+    // Kumpulkan semua window terlihat yang judulnya memuat judul media.
+    unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let search = unsafe { &mut *(lparam.0 as *mut Search) };
+
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            return TRUE;
+        }
+
+        let mut buf = [0u16; 512];
+        let len = unsafe { GetWindowTextW(hwnd, &mut buf) };
+
+        if len <= 0 {
+            return TRUE;
+        }
+
+        let text = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
+
+        if text.contains(&search.needle) {
+            search.hits.push(text);
+        }
+
+        TRUE
+    }
+
+    // Some(true) = musik, Some(false) = video, None = tidak bisa dipastikan.
+    pub fn title_hint(media_title: &str) -> Option<bool> {
+        let needle = media_title.trim().to_lowercase();
+
+        if needle.chars().count() < 3 {
+            return None;
+        }
+
+        let mut search = Search {
+            needle,
+            hits: Vec::new(),
+        };
+
+        let _ = unsafe {
+            EnumWindows(Some(enum_cb), LPARAM(&mut search as *mut Search as isize))
+        };
+
+        // Situs musik diperiksa lebih dulu karena "YouTube Music" juga memuat kata "YouTube".
+        if search
+            .hits
+            .iter()
+            .any(|t| MUSIC_SITES.iter().any(|k| t.contains(k)))
+        {
+            return Some(true);
+        }
+
+        if search
+            .hits
+            .iter()
+            .any(|t| VIDEO_SITES.iter().any(|k| t.contains(k)))
+        {
+            return Some(false);
+        }
+
+        None
+    }
+}
+
+// Tentukan apakah yang sedang diputar musik atau video.
+#[cfg(windows)]
+fn classify_source(app: &str, album: &str, title: &str) -> &'static str {
+    let id = app.to_lowercase();
+
+    // Tidak ada sesi media: biarkan tampilan musik seperti biasa.
+    if id.is_empty() {
+        return "music";
+    }
+
+    if MUSIC_APPS.iter().any(|k| id.contains(k)) {
+        return "music";
+    }
+
+    if VIDEO_APPS.iter().any(|k| id.contains(k)) {
+        return "video";
+    }
+
+    let is_browser = BROWSER_APPS.iter().any(|k| id.contains(k)) || looks_like_hash_id(&id);
+    let is_mixed = MIXED_PLAYERS.iter().any(|k| id.contains(k));
+
+    // Browser atau aplikasi tak dikenal: cek judul window (tab yang sedang terbuka).
+    if !is_mixed {
+        if let Some(is_music) = source_hint::title_hint(title) {
+            return if is_music { "music" } else { "video" };
+        }
+    }
+
+    // Tanpa petunjuk lain: lagu biasanya punya info album, video biasanya tidak.
+    if is_browser || is_mixed {
+        return if album.trim().is_empty() { "video" } else { "music" };
+    }
+
+    // Aplikasi tak dikenal: tetap anggap musik (perilaku lama).
+    "music"
+}
+
 // Ambil sesi media aktif Windows.
 #[cfg(windows)]
 async fn get_active_session(
@@ -478,8 +700,16 @@ async fn start_media_listener(app: AppHandle) {
             let mut album_art = String::new();
             let mut position_secs = 0.0;
             let mut duration_secs = 0.0;
+            let mut source_app = String::new();
+            let mut album_title = String::new();
 
             if let Ok(session) = get_active_session().await {
+                // Aplikasi pemutar (Spotify, Chrome, dst.) untuk membedakan musik / video.
+                source_app = session
+                    .SourceAppUserModelId()
+                    .map(|id| id.to_string())
+                    .unwrap_or_default();
+
                 if let Ok(playback_info) = session.GetPlaybackInfo() {
                     let status = playback_info.PlaybackStatus().unwrap_or_default().0;
                     is_playing = status == 4;
@@ -521,6 +751,7 @@ async fn start_media_listener(app: AppHandle) {
                     if let Ok(media_properties) = media_props_op.get() {
                         title = media_properties.Title().unwrap_or_default().to_string();
                         artist = media_properties.Artist().unwrap_or_default().to_string();
+                        album_title = media_properties.AlbumTitle().unwrap_or_default().to_string();
 
                         if let Ok(thumbnail_ref) = media_properties.Thumbnail() {
                             if let Ok(stream_op) = thumbnail_ref.OpenReadAsync() {
@@ -558,6 +789,9 @@ async fn start_media_listener(app: AppHandle) {
                 }
             }
 
+            // Musik atau video? Dihitung sebelum `title` dipindahkan ke MediaInfo.
+            let source_kind = classify_source(&source_app, &album_title, &title);
+
             let _ = app.emit(
                 "spotify-status-update",
                 MediaInfo {
@@ -575,6 +809,15 @@ async fn start_media_listener(app: AppHandle) {
                     album_art,
                     position_secs,
                     duration_secs,
+                },
+            );
+
+            // Event terpisah supaya payload "spotify-status-update" tidak berubah.
+            let _ = app.emit(
+                "media-source-update",
+                MediaSourceInfo {
+                    kind: source_kind,
+                    app: source_app,
                 },
             );
 
