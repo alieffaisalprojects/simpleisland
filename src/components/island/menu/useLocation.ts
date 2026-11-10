@@ -1,6 +1,8 @@
 /**
  * File: useLocation.ts
  * Kegunaan: Lokasi untuk jadwal salat.
+ *   - Lokasi baru dicari setelah halaman jadwal salat / lokasi dibuka (parameter `enabled`),
+ *     bukan saat menu pertama dibuka, supaya menu tidak tertahan oleh pencarian GPS.
  *   - GPS presisi tinggi: menunggu fix terbaik (hingga 12 detik), berhenti dini bila akurasi <= 100 m.
  *   - Pilih kota manual (pencarian) untuk hasil paling pasti.
  *   - Perkiraan dari IP hanya cadangan, karena sering menunjuk kantor ISP, bukan posisi Anda.
@@ -104,7 +106,9 @@ export async function searchPlaces(query: string): Promise<Place[]> {
   const d = await getJson(
     `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=id&format=json`,
   );
-  const rows: Record<string, unknown>[] = Array.isArray(d.results) ? d.results : [];
+  const rows: Record<string, unknown>[] = Array.isArray(d.results)
+    ? d.results
+    : [];
   return rows.map((r) => ({
     name: String(r.name),
     sub: [r.admin2, r.admin1, r.country].filter(Boolean).join(", "),
@@ -164,8 +168,13 @@ async function permissionState(): Promise<PermissionState> {
   }
 }
 
-/** onBusy(true) selama GPS / dialog izin berjalan, supaya island tidak menutup saat window kehilangan fokus. */
-export function useLocation(onBusy?: (busy: boolean) => void) {
+/**
+ * onBusy(true) hanya selama dialog izin lokasi bisa muncul, supaya island tidak menutup
+ * saat window kehilangan fokus. Bila izin sudah ada, GPS berjalan tanpa menahan island.
+ *
+ * enabled: pencarian lokasi baru dimulai saat nilainya true (sekali per menu dibuka).
+ */
+export function useLocation(onBusy?: (busy: boolean) => void, enabled = true) {
   const [loc, setLoc] = useState<GeoLocation>(load);
   const [status, setStatus] = useState<LocationStatus>("idle");
   const busyRef = useRef(onBusy);
@@ -178,9 +187,15 @@ export function useLocation(onBusy?: (busy: boolean) => void) {
 
   const detectGps = useCallback(async () => {
     setStatus("locating");
-    busyRef.current?.(true);
+    // island ditahan terbuka hanya bila dialog izin mungkin muncul
+    const hold = (await permissionState()) === "prompt";
+    if (hold) busyRef.current?.(true);
     try {
-      const { latitude: lat, longitude: lng, accuracy } = (await readGps()).coords;
+      const {
+        latitude: lat,
+        longitude: lng,
+        accuracy,
+      } = (await readGps()).coords;
       apply({
         lat,
         lng,
@@ -200,20 +215,31 @@ export function useLocation(onBusy?: (busy: boolean) => void) {
           .catch(() => {});
       }
     } finally {
-      window.setTimeout(() => busyRef.current?.(false), 600);
+      if (hold) window.setTimeout(() => busyRef.current?.(false), 600);
     }
   }, [apply]);
 
   const setManual = useCallback(
     (p: Place) => {
-      apply({ lat: p.lat, lng: p.lng, city: p.name, source: "manual", at: Date.now() });
+      apply({
+        lat: p.lat,
+        lng: p.lng,
+        city: p.name,
+        source: "manual",
+        at: Date.now(),
+      });
       setStatus("idle");
     },
     [apply],
   );
 
-  // setiap menu dibuka: perbarui lokasi dari GPS kecuali dipilih manual
+  // setelah halaman jadwal salat dibuka: perbarui lokasi dari GPS kecuali dipilih manual
+  const startedRef = useRef(false);
+
   useEffect(() => {
+    if (!enabled || startedRef.current) return;
+    startedRef.current = true;
+
     const cached = load();
     if (cached.source === "manual") return;
 
@@ -226,10 +252,19 @@ export function useLocation(onBusy?: (busy: boolean) => void) {
         }
         return;
       }
-      if (cached.source === "gps" && Date.now() - cached.at < FRESH_GPS_MS) return;
+      if (cached.source === "gps" && Date.now() - cached.at < FRESH_GPS_MS)
+        return;
       void detectGps();
     })();
-  }, [apply, detectGps]);
+  }, [enabled, apply, detectGps]);
+
+  // keluar dari halaman lokasi: lepas penahan island
+  useEffect(() => {
+    if (!enabled) busyRef.current?.(false);
+  }, [enabled]);
+
+  // menu ditutup: pastikan penahan island terlepas
+  useEffect(() => () => busyRef.current?.(false), []);
 
   return { loc, status, detectGps, setManual };
 }
