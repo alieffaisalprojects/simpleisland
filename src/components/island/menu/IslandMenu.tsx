@@ -107,9 +107,9 @@ const Header: React.FC<{
 
 type TileTone = "sky" | "amber" | "green";
 
-// Warna tile saat aktif (+ saat di-hover).
+// Warna button wifi, bluetooth
 const TILE_LIT: Record<TileTone, string> = {
-  sky: "bg-sky-400/30 hover:bg-sky-400/40",
+  sky: "bg-sky-400/60 hover:bg-sky-400/80",
   amber: "bg-amber-400/30 hover:bg-amber-400/40",
   green: "bg-emerald-400/30 hover:bg-emerald-400/40",
 };
