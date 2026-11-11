@@ -12,7 +12,7 @@ import {
   useMotionValue,
   useTransform,
 } from "framer-motion";
-import { Minus, Music, Pause, Play, Plus, Volume2 } from "lucide-react";
+import { Music, Pause, Play, Volume2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LyricsState, SpotifyTrack } from "../../types";
@@ -46,11 +46,9 @@ interface SpotifyWidgetProps {
   locked?: boolean;
   onLockedChange?: (locked: boolean) => void;
 
-  // Tombol volume -/+ (1 = naik, -1 = turun). HUD-nya digambar oleh DynamicIsland
-  onVolumeStep?: (direction: 1 | -1) => void;
-
-  // Panel volume dibuka / ditutup (HUD ikut hilang saat ditutup)
-  onVolumePanelChange?: (open: boolean) => void;
+  // Tombol volume ditekan. DynamicIsland yang menampilkan VolumeHud
+  // (island berubah jadi pil volume, lalu kembali ke player setelah 1,5 detik)
+  onVolumePress?: () => void;
 }
 
 // Perintah media dari backend
@@ -64,13 +62,6 @@ export const SPOTIFY_SIZES = {
   lyrics: { width: 394, height: 232 },
   lyricsMini: { width: 300, height: 38 },
 } as const;
-
-// Posisi tengah tombol volume (px dari atas island). Dipakai juga oleh
-// DynamicIsland untuk menaruh gundukan hitam tepat di sisi tombol yang ditekan
-export const VOLUME_BTN_Y = { plus: 50, minus: 103 } as const;
-
-// Konten judul + progress bergeser sejauh ini ke kiri saat panel volume terbuka
-const VOLUME_COL_SHIFT = 48;
 
 // Kurva animasi morphing
 const MORPH_EASE: [number, number, number, number] = [0.32, 0.72, 0, 1];
@@ -936,99 +927,6 @@ const SeekButton: React.FC<{
   );
 };
 
-// Konten bergeser ke kiri / kembali
-const VOLUME_SHIFT_SPRING = {
-  type: "spring",
-  stiffness: 380,
-  damping: 32,
-  mass: 0.8,
-} as const;
-
-// Tombol + dan - muncul
-const VOLUME_BTN_SPRING = {
-  type: "spring",
-  stiffness: 420,
-  damping: 24,
-} as const;
-
-// Tombol volume: tahan untuk mengulang
-const VOLUME_REPEAT_DELAY = 380;
-const VOLUME_REPEAT_EVERY = 110;
-
-// Tombol volume (-/+) dengan efek tekan yang sama seperti tombol skip
-const VolumeButton: React.FC<{
-  direction: 1 | -1;
-  label: string;
-  onStep: (direction: 1 | -1) => void;
-}> = ({ direction, label, onStep }) => {
-  // Selalu memakai onStep terbaru, termasuk di dalam interval
-  const stepRef = useRef(onStep);
-  stepRef.current = onStep;
-
-  const delayTimer = useRef<number | undefined>(undefined);
-  const repeatTimer = useRef<number | undefined>(undefined);
-
-  const stop = useCallback(() => {
-    window.clearTimeout(delayTimer.current);
-    window.clearInterval(repeatTimer.current);
-  }, []);
-
-  // Hentikan pengulangan saat tombol hilang (island ditutup)
-  useEffect(() => stop, [stop]);
-
-  // Tekan: langsung 1 langkah, lalu berulang jika ditahan
-  const handlePointerDown = (e: React.PointerEvent) => {
-    // Jangan ikut menekan island
-    e.stopPropagation();
-
-    if (e.button !== 0) return;
-
-    stop();
-    stepRef.current(direction);
-
-    delayTimer.current = window.setTimeout(() => {
-      repeatTimer.current = window.setInterval(
-        () => stepRef.current(direction),
-        VOLUME_REPEAT_EVERY,
-      );
-    }, VOLUME_REPEAT_DELAY);
-  };
-
-  return (
-    <motion.button
-      type="button"
-      aria-label={label}
-      onPointerDown={handlePointerDown}
-      onPointerUp={stop}
-      onPointerLeave={stop}
-      onPointerCancel={stop}
-      onClick={(e) => {
-        // Jangan menutup island. detail === 0 = lewat keyboard (Enter/Space)
-        e.stopPropagation();
-        if (e.detail === 0) onStep(direction);
-      }}
-      onMouseDown={(e) => e.preventDefault()}
-      className="relative inline-flex h-8 w-8 items-center justify-center rounded-full text-white/70 hover:text-white focus:outline-none"
-      variants={skipButtonVariants}
-      initial="rest"
-      animate="rest"
-      whileTap="pressed"
-    >
-      {/* Lingkaran highlight saat ditekan */}
-      <motion.span
-        className="pointer-events-none absolute inset-0 rounded-full bg-white/[0.16]"
-        variants={skipHighlightVariants}
-      />
-
-      {direction > 0 ? (
-        <Plus size={19} strokeWidth={2.4} className="relative" />
-      ) : (
-        <Minus size={19} strokeWidth={2.4} className="relative" />
-      )}
-    </motion.button>
-  );
-};
-
 // ---- Teks berjalan (judul panjang) ----
 
 // Kecepatan geser (px per detik): pelan
@@ -1189,8 +1087,7 @@ const ExpandedView: React.FC<{
   runCommand: (command: MediaCommand) => void;
   onSeek: (positionSecs: number) => void;
   onOpenLyrics: () => void;
-  onVolumeStep?: (direction: 1 | -1) => void;
-  onVolumePanelChange?: (open: boolean) => void;
+  onVolumePress?: () => void;
 }> = ({
   track,
   palette,
@@ -1198,18 +1095,8 @@ const ExpandedView: React.FC<{
   runCommand,
   onSeek,
   onOpenLyrics,
-  onVolumeStep,
-  onVolumePanelChange,
+  onVolumePress,
 }) => {
-  // Panel volume (+ / -) terbuka. Tertutup lagi otomatis saat island ditutup
-  const [volumeOpen, setVolumeOpen] = useState(false);
-
-  const toggleVolume = () => {
-    const next = !volumeOpen;
-    setVolumeOpen(next);
-    onVolumePanelChange?.(next);
-  };
-
   // Warna utama album
   const accent = palette[0] ?? FALLBACK_PALETTE[0];
 
@@ -1445,13 +1332,8 @@ const ExpandedView: React.FC<{
         ["--album-accent" as string]: accent,
       }}
     >
-      {/* Informasi lagu (bergeser ke kiri saat panel volume terbuka) */}
-      <motion.div
-        className="relative flex min-w-0 items-center gap-3.5"
-        initial={false}
-        animate={{ paddingRight: volumeOpen ? VOLUME_COL_SHIFT : 0 }}
-        transition={VOLUME_SHIFT_SPRING}
-      >
+      {/* Informasi lagu */}
+      <div className="relative flex min-w-0 items-center gap-3.5">
         {/* Kontainer album */}
         <motion.div
           className="h-[58px] w-[58px] shrink-0"
@@ -1522,15 +1404,10 @@ const ExpandedView: React.FC<{
             {track.artist || "Unknown Artist"}
           </div>
         </div>
-      </motion.div>
+      </div>
 
       {/* Kontainer progress lagu: waktu kiri | bar | waktu kanan */}
-      <motion.div
-        className="relative mt-3 flex items-center gap-2"
-        initial={false}
-        animate={{ paddingRight: volumeOpen ? VOLUME_COL_SHIFT : 0 }}
-        transition={VOLUME_SHIFT_SPRING}
-      >
+      <div className="relative mt-3 flex items-center gap-2">
         {/* Waktu berjalan (kiri): abu-abu, putih saat progress digeser */}
         <span
           ref={elapsedRef}
@@ -1578,7 +1455,7 @@ const ExpandedView: React.FC<{
         >
           --:--
         </span>
-      </motion.div>
+      </div>
 
       {/* Kontainer tombol kontrol musik */}
       <div className="relative mt-3 flex items-center justify-between px-1">
@@ -1652,82 +1529,20 @@ const ExpandedView: React.FC<{
           )}
         </div>
 
-        {/* Tombol membuka panel volume (kanan bawah, selebar tombol lirik) */}
+        {/* Tombol volume (kanan bawah, selebar tombol lirik): memanggil VolumeHud */}
         <button
           type="button"
-          aria-label={volumeOpen ? "Tutup volume" : "Buka volume"}
-          aria-pressed={volumeOpen}
+          aria-label="Volume"
           onClick={(e) => {
             e.stopPropagation();
-            toggleVolume();
+            onVolumePress?.();
           }}
           onMouseDown={(e) => e.preventDefault()}
-          className={`flex h-8 w-8 items-center justify-center rounded-full transition active:scale-90 ${
-            volumeOpen
-              ? "bg-white/15 text-white"
-              : "text-white/55 hover:bg-white/10 hover:text-white"
-          }`}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white active:scale-90"
         >
           <Volume2 size={19} />
         </button>
       </div>
-
-      {/* Panel volume: + di atas, - di bawah, sejajar dengan tombol di baris bawah */}
-      <AnimatePresence>
-        {volumeOpen && (
-          <motion.div
-            key="volume-plus"
-            className="absolute z-10"
-            style={{ right: 26, top: VOLUME_BTN_Y.plus - 16 }}
-            initial={{ opacity: 0, scale: 0.5, x: 10 }}
-            animate={{
-              opacity: 1,
-              scale: 1,
-              x: 0,
-              transition: { ...VOLUME_BTN_SPRING, delay: 0.05 },
-            }}
-            exit={{
-              opacity: 0,
-              scale: 0.5,
-              x: 10,
-              transition: { duration: 0.12 },
-            }}
-          >
-            <VolumeButton
-              direction={1}
-              label="Volume naik"
-              onStep={(d) => onVolumeStep?.(d)}
-            />
-          </motion.div>
-        )}
-
-        {volumeOpen && (
-          <motion.div
-            key="volume-minus"
-            className="absolute z-10"
-            style={{ right: 26, top: VOLUME_BTN_Y.minus - 16 }}
-            initial={{ opacity: 0, scale: 0.5, x: 10 }}
-            animate={{
-              opacity: 1,
-              scale: 1,
-              x: 0,
-              transition: { ...VOLUME_BTN_SPRING, delay: 0.1 },
-            }}
-            exit={{
-              opacity: 0,
-              scale: 0.5,
-              x: 10,
-              transition: { duration: 0.12 },
-            }}
-          >
-            <VolumeButton
-              direction={-1}
-              label="Volume turun"
-              onStep={(d) => onVolumeStep?.(d)}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 };
@@ -1902,8 +1717,7 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
   onLyricsModeChange,
   locked = false,
   onLockedChange,
-  onVolumeStep,
-  onVolumePanelChange,
+  onVolumePress,
 }) => {
   // Mengambil warna album
   const palette = useAlbumPalette(track.albumArt);
@@ -2062,8 +1876,7 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
                     runCommand={runCommand}
                     onSeek={handleSeek}
                     onOpenLyrics={() => onLyricsModeChange?.(true)}
-                    onVolumeStep={onVolumeStep}
-                    onVolumePanelChange={onVolumePanelChange}
+                    onVolumePress={onVolumePress}
                   />
                 </motion.div>
               )}

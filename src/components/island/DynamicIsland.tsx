@@ -10,7 +10,7 @@ import {
   LyricsState,
   SpotifyTrack,
 } from "../../types";
-import { MorphLayer, SpotifyWidget, VOLUME_BTN_Y } from "./SpotifyWidget";
+import { MorphLayer, SpotifyWidget } from "./SpotifyWidget";
 import { TimerCompact, TimerExpanded, TimerPill } from "./ClockTimerView";
 import { SystemWidget } from "../modules/SystemWidget";
 import { FileActionsPanel, getFilePanelSize } from "./file/FileActionsPanel";
@@ -36,12 +36,6 @@ import {
   SEC_SQUASH_Y,
   SEC_SHAPE_ENTER,
   SEC_CONTENT_ENTER,
-  HUD_W,
-  HUD_H,
-  HUD_PAD,
-  BUMP_H,
-  BUMP_OUT,
-  BUMP_IN,
   TAB_OUT,
   TAB_W,
   TAB_H,
@@ -49,14 +43,6 @@ import {
   TAB_ENTER,
   TAB_EXIT,
   getMenuBack,
-  HudExit,
-  hudShapeVariants,
-  hudContentVariants,
-  HUD_FILL_SPRING,
-  HUD_STRETCH_X,
-  HUD_SQUASH_Y,
-  HUD_SHAPE_ENTER,
-  HUD_CONTENT_ENTER,
   swapFade,
   getKind,
   getSecondary,
@@ -69,7 +55,7 @@ import {
 } from "./dynamic_island/constants";
 import { useIslandVolume } from "./dynamic_island/useIslandVolume";
 import { IslandMenu } from "./menu/IslandMenu";
-import { VOLUME_HUD_H, VOLUME_HUD_W } from "./menu/VolumeHud";
+import { VOLUME_HUD_H, VOLUME_HUD_W, VolumeHud } from "./menu/VolumeHud";
 import { useStopwatchRunning } from "./menu/stopwatchStore";
 
 interface DynamicIslandProps {
@@ -206,8 +192,27 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     (isMini ? S.mini.height : COMPACT_HEIGHT) + adj.h,
   );
 
-  // HUD volume: menu disembunyikan, island menjadi pil horizontal
-  const hudMode = kind === "menu" && menuView === "home" && menuHud;
+  // ---- Volume ----
+
+  // tombol volume hanya ada saat player terbuka
+  const musicExpanded =
+    expanded && kind === "music" && !lyricsMode && !forceMini;
+
+  // logika di useIslandVolume
+  const {
+    volumeStatus,
+    volumeHudOpen,
+    openVolumeHud,
+    closeVolumeHud,
+    setVolumeLevel,
+  } = useIslandVolume(musicExpanded);
+
+  // HUD volume: island menjadi pil horizontal (VolumeHud)
+  // - dari menu: menu disembunyikan
+  // - dari player musik: player disembunyikan, kembali setelah 1,5 detik idle
+  const musicHudOn = musicExpanded && volumeHudOpen;
+  const hudMode =
+    (kind === "menu" && menuView === "home" && menuHud) || musicHudOn;
 
   const { width: expandedWidth, height: expandedHeight } = hudMode
     ? { width: VOLUME_HUD_W, height: VOLUME_HUD_H }
@@ -312,26 +317,6 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     }
     openMenu();
   };
-
-  // ---- Volume ----
-
-  // HUD hanya saat player terbuka
-  const musicExpanded =
-    expanded && kind === "music" && !lyricsMode && !forceMini;
-
-  // logika di useIslandVolume
-  const {
-    volume,
-    showVolume,
-    volumeWindow,
-    bumpAt,
-    hudPulseX,
-    hudPulseY,
-    hudShift,
-    bumpGrow,
-    handleVolumeStep,
-    handleVolumePanelChange,
-  } = useIslandVolume(musicExpanded);
 
   // ---- Window Tauri ----
 
@@ -591,8 +576,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     return () => window.clearTimeout(t);
   }, [showSecondary]);
 
-  const gooOn =
-    showSecondary || gooTail || volumeWindow || menuTabOn || tabTail;
+  const gooOn = showSecondary || gooTail || menuTabOn || tabTail;
 
   // ---- pil kedua ----
 
@@ -645,47 +629,6 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     height: TAB_H,
     borderRadius: TAB_H / 2,
     transformOrigin: `${TAB_OUT}px 50%`,
-  };
-
-  // ---- HUD volume ----
-
-  // posisi HUD
-  const hudRestX = expandedWidth / 2 + SPLIT_GAP;
-  const hudHiddenX = expandedWidth / 2 - HUD_W * 0.6;
-  const hudTop = islandTop + (expandedHeight - HUD_H) / 2;
-
-  const hudStyle: React.CSSProperties = {
-    top: hudTop,
-    left: "50%",
-    width: HUD_W,
-    height: HUD_H,
-    transformOrigin: "left center",
-  };
-
-  // tujuan HUD saat keluar
-  // island menciut: HUD naik dan menyatu ke pil compact
-  // masih expanded: HUD masuk ke tepi island
-  const hudExit: HudExit = !expanded
-    ? {
-        x: compactWidth / 2 - HUD_W * 0.6,
-        y: (collapsedHeight - expandedHeight) / 2,
-        scaleX: 0.5,
-        scaleY: Math.min(0.55, (collapsedHeight * 0.8) / HUD_H),
-        absorb: true,
-      }
-    : { x: hudHiddenX, y: 0, scaleX: 0.5, scaleY: 0.55, absorb: false };
-
-  // gundukan
-  const bumpCenterY =
-    bumpAt === "plus" ? VOLUME_BTN_Y.plus : VOLUME_BTN_Y.minus;
-
-  const bumpStyle: React.CSSProperties = {
-    top: islandTop + bumpCenterY - BUMP_H / 2,
-    left: `calc(50% + ${expandedWidth / 2 - BUMP_IN}px)`,
-    width: BUMP_IN + BUMP_OUT,
-    height: BUMP_H,
-    borderRadius: BUMP_H / 2,
-    transformOrigin: `${BUMP_IN}px 50%`,
   };
 
   // ---- timer ----
@@ -805,6 +748,30 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
     // musik
     if (kind === "music") {
+      // VolumeHud: dipanggil dari tombol volume, menutup sendiri setelah 1,5 detik
+      if (musicHudOn) {
+        return (
+          <motion.div
+            key="music-volume-hud"
+            className="relative h-full w-full"
+            {...swapFade}
+          >
+            <MorphLayer
+              key="music-volume-hud-layer"
+              variant="expanded"
+              width={expandedWidth}
+              height={expandedHeight}
+            >
+              <VolumeHud
+                volume={volumeStatus}
+                onChange={setVolumeLevel}
+                onClose={closeVolumeHud}
+              />
+            </MorphLayer>
+          </motion.div>
+        );
+      }
+
       return (
         <motion.div
           key="music"
@@ -823,8 +790,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             onLyricsModeChange={setLyricsMode}
             locked={locked}
             onLockedChange={setLocked}
-            onVolumeStep={handleVolumeStep}
-            onVolumePanelChange={handleVolumePanelChange}
+            onVolumePress={openVolumeHud}
             widthAdjust={adj.w}
             heightAdjust={adj.h}
           />
@@ -953,14 +919,6 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           <IslandShoulders size={shoulder} />
         </motion.div>
 
-        {/* gundukan */}
-        {volumeWindow && (
-          <motion.div
-            className="absolute bg-[#050506]"
-            style={{ ...bumpStyle, scale: bumpGrow }}
-          />
-        )}
-
         {/* tab kembali (menyatu dengan island lewat gooey) */}
         <motion.div
           className="pointer-events-none absolute left-1/2"
@@ -982,38 +940,6 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             )}
           </AnimatePresence>
         </motion.div>
-
-        {/* HUD volume */}
-        <AnimatePresence custom={hudExit}>
-          {showVolume && (
-            <motion.div
-              key="volume-shape"
-              className="absolute"
-              style={hudStyle}
-              variants={hudShapeVariants}
-              custom={hudExit}
-              initial={{ x: hudHiddenX, y: 0, scaleX: 0.5, scaleY: 0.55 }}
-              animate={{
-                x: hudRestX,
-                y: 0,
-                scaleX: HUD_STRETCH_X,
-                scaleY: HUD_SQUASH_Y,
-                transition: HUD_SHAPE_ENTER,
-              }}
-              exit="exit"
-            >
-              <motion.div
-                className="h-full w-full bg-[#050506]"
-                style={{
-                  borderRadius: HUD_W / 2,
-                  x: hudShift,
-                  scaleX: hudPulseX,
-                  scaleY: hudPulseY,
-                }}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {/* pil kedua */}
         <AnimatePresence>
@@ -1119,47 +1045,6 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           )}
         </AnimatePresence>
       </motion.div>
-
-      {/* isi HUD */}
-      <AnimatePresence custom={hudExit}>
-        {showVolume && (
-          <motion.div
-            key="volume-content"
-            className="pointer-events-none absolute z-40"
-            style={hudStyle}
-            variants={hudContentVariants}
-            custom={hudExit}
-            initial={{ x: hudHiddenX, y: 0, scale: 0.6, opacity: 0 }}
-            animate={{
-              x: hudRestX,
-              y: 0,
-              scale: 1,
-              opacity: 1,
-              transition: HUD_CONTENT_ENTER,
-            }}
-            exit="exit"
-          >
-            <motion.div
-              className="h-full w-full"
-              style={{
-                padding: HUD_PAD,
-                x: hudShift,
-                scaleX: hudPulseX,
-                scaleY: hudPulseY,
-              }}
-            >
-              <div className="relative h-full w-full overflow-hidden rounded-full bg-white/[0.2]">
-                <motion.div
-                  className="h-full w-full rounded-full bg-white"
-                  initial={false}
-                  animate={{ y: `${(1 - volume) * 100}%` }}
-                  transition={HUD_FILL_SPRING}
-                />
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* isi pil kedua */}
       <AnimatePresence>
