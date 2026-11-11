@@ -24,9 +24,7 @@ import catatanIcon from "../../../assets/styles/icons/catatan.svg";
 import wifiIcon from "../../../assets/styles/menu_icons/wifi.svg";
 import bluetoothIcon from "../../../assets/styles/menu_icons/bluetooth.svg";
 import airplaneIcon from "../../../assets/styles/menu_icons/airplane.svg";
-import powerSaverIcon from "../../../assets/styles/menu_icons/power_saver.svg";
-import powerBalancedIcon from "../../../assets/styles/menu_icons/power_balanced.svg";
-import powerPerformanceIcon from "../../../assets/styles/menu_icons/power_performance.svg";
+import speakerIcon from "../../../assets/styles/icons/speaker.svg";
 import chooseSound from "../../../assets/sounds/choose.wav";
 import dropSound from "../../../assets/sounds/drop.wav";
 import { getPrayerState } from "./prayer";
@@ -35,9 +33,10 @@ import { CalendarView } from "./CalendarUi";
 import { GeoLocation, Place, searchPlaces, useLocation } from "./useLocation";
 import { usePrayerSchedule } from "./usePrayerSchedule";
 import { stopwatch, useStopwatchRunning } from "./stopwatchStore";
-import { PowerMode, SystemInfo, useSystemStatus } from "./useSystemStatus";
+import { SystemInfo, useSystemStatus } from "./useSystemStatus";
 import { SystemStatusBar } from "./SystemStatusBar";
 import { BluetoothView, WifiView } from "./NetworkViews";
+import { VolumeHud, VOLUME_HUD_H, VOLUME_HUD_W } from "./VolumeHud";
 
 interface IslandMenuProps {
   view: MenuView;
@@ -45,6 +44,9 @@ interface IslandMenuProps {
   onClose: () => void;
   /** Status dialog izin lokasi. */
   onBusyChange: (busy: boolean) => void;
+  /** HUD volume tampil: menu disembunyikan, island menjadi pil horizontal. */
+  hud: boolean;
+  onHudChange: (on: boolean) => void;
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -178,40 +180,15 @@ const MenuTile: React.FC<TileProps> = ({
   );
 };
 
-// Mode daya Windows: urutan saat tile diklik (klik kanan = mundur).
-const POWER_ORDER: PowerMode[] = ["saver", "balanced", "performance"];
-
-const POWER_META: Record<
-  PowerMode,
-  { label: string; icon: string; tone: TileTone }
-> = {
-  saver: { label: "Hemat daya", icon: powerSaverIcon, tone: "green" },
-  balanced: { label: "Seimbang", icon: powerBalancedIcon, tone: "sky" },
-  performance: {
-    label: "Performa tinggi",
-    icon: powerPerformanceIcon,
-    tone: "amber",
-  },
-};
-
 // Halaman utama menu.
 
 const HomeView: React.FC<{
   swRunning: boolean;
   sys: SystemInfo;
   onOpen: (view: MenuView) => void;
-}> = ({ swRunning, sys, onOpen }) => {
-  const { status, radios, power } = sys;
-
-  // Pindah power mode: maju (klik) atau mundur (klik kanan).
-  const stepPower = (dir: 1 | -1) => {
-    if (!power.supported) return;
-    const i = POWER_ORDER.indexOf(power.mode);
-    const next =
-      POWER_ORDER[(i + dir + POWER_ORDER.length) % POWER_ORDER.length];
-    void sys.setPowerMode(next);
-  };
-  const powerMeta = POWER_META[power.mode];
+  onShowHud: () => void;
+}> = ({ swRunning, sys, onOpen, onShowHud }) => {
+  const { status, radios, volume } = sys;
 
   // Daftar aplikasi.
   const apps: { id: MenuView; name: string; icon: string }[] = [
@@ -222,59 +199,61 @@ const HomeView: React.FC<{
   ];
 
   return (
-    <div className="flex h-full w-full flex-col gap-2 p-[18px]">
-      <SystemStatusBar
-        battery={status.battery}
-        net={status.net}
-        radios={radios}
-      />
+    <div className="relative h-full w-full">
+      <div className="flex h-full w-full flex-col gap-2 p-[18px]">
+        <SystemStatusBar
+          battery={status.battery}
+          net={status.net}
+          radios={radios}
+        />
 
-      <div className="flex min-h-0 flex-1 gap-2">
-        {apps.map(({ id, name, icon }) => (
+        <div className="flex min-h-0 flex-1 gap-2">
+          {apps.map(({ id, name, icon }) => (
+            <MenuTile
+              key={id}
+              name={name}
+              icon={icon}
+              dot={id === "stopwatch" && swRunning}
+              onClick={() => onOpen(id)}
+            />
+          ))}
+        </div>
+
+        <div className="flex min-h-0 flex-1 gap-2">
           <MenuTile
-            key={id}
-            name={name}
-            icon={icon}
-            dot={id === "stopwatch" && swRunning}
-            onClick={() => onOpen(id)}
+            name={`Wi-Fi (klik kanan: ${radios.wifiOn ? "matikan" : "nyalakan"})`}
+            icon={wifiIcon}
+            active={radios.wifiOn}
+            onClick={() => onOpen("wifi")}
+            onContext={() => void sys.setWifi(!radios.wifiOn)}
           />
-        ))}
-      </div>
-
-      <div className="flex min-h-0 flex-1 gap-2">
-        <MenuTile
-          name={`Wi-Fi (klik kanan: ${radios.wifiOn ? "matikan" : "nyalakan"})`}
-          icon={wifiIcon}
-          active={radios.wifiOn}
-          onClick={() => onOpen("wifi")}
-          onContext={() => void sys.setWifi(!radios.wifiOn)}
-        />
-        <MenuTile
-          name={`Bluetooth (klik kanan: ${radios.bluetoothOn ? "matikan" : "nyalakan"})`}
-          icon={bluetoothIcon}
-          active={radios.bluetoothOn}
-          onClick={() => onOpen("bluetooth")}
-          onContext={() => void sys.setBluetooth(!radios.bluetoothOn)}
-        />
-        <MenuTile
-          name={`Mode pesawat (${radios.airplane ? "nyala" : "mati"})`}
-          icon={airplaneIcon}
-          active={radios.airplane}
-          tone="amber"
-          onClick={() => void sys.setAirplane(!radios.airplane)}
-        />
-        <MenuTile
-          name={
-            power.supported
-              ? `Mode daya: ${powerMeta.label} (klik: ganti, klik kanan: kembali)`
-              : "Mode daya (tidak didukung di Windows ini)"
-          }
-          icon={powerMeta.icon}
-          active={power.supported && power.mode !== "balanced"}
-          tone={powerMeta.tone}
-          onClick={() => stepPower(1)}
-          onContext={() => stepPower(-1)}
-        />
+          <MenuTile
+            name={`Bluetooth (klik kanan: ${radios.bluetoothOn ? "matikan" : "nyalakan"})`}
+            icon={bluetoothIcon}
+            active={radios.bluetoothOn}
+            onClick={() => onOpen("bluetooth")}
+            onContext={() => void sys.setBluetooth(!radios.bluetoothOn)}
+          />
+          <MenuTile
+            name={`Mode pesawat (${radios.airplane ? "nyala" : "mati"})`}
+            icon={airplaneIcon}
+            active={radios.airplane}
+            tone="amber"
+            onClick={() => void sys.setAirplane(!radios.airplane)}
+          />
+          <MenuTile
+            name={
+              volume.supported
+                ? `Volume: ${volume.muted ? "senyap" : `${volume.level}%`}`
+                : "Volume (perangkat audio tidak ditemukan)"
+            }
+            icon={speakerIcon}
+            onClick={() => {
+              // menu disembunyikan, island berubah jadi pil HUD volume
+              if (volume.supported) onShowHud();
+            }}
+          />
+        </div>
       </div>
     </div>
   );
@@ -564,6 +543,8 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
   onViewChange,
   onClose,
   onBusyChange,
+  hud,
+  onHudChange,
 }) => {
   const now = useNow(1000);
   const swRunning = useStopwatchRunning();
@@ -571,7 +552,10 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
   const { loc, status, detectGps, setManual } = useLocation(onBusyChange);
   const schedule = usePrayerSchedule(loc.lat, loc.lng, now);
   const prayer = getPrayerState(now, schedule.tz, schedule.resolve);
-  const size = MENU_SIZES[view];
+  const showHud = hud && view === "home";
+  const size = showHud
+    ? { width: VOLUME_HUD_W, height: VOLUME_HUD_H }
+    : MENU_SIZES[view];
   const back = () => onViewChange("home");
 
   // Kontrol geser antar-menu.
@@ -672,7 +656,12 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
         );
       default:
         return (
-          <HomeView swRunning={swRunning} sys={sys} onOpen={onViewChange} />
+          <HomeView
+            swRunning={swRunning}
+            sys={sys}
+            onOpen={onViewChange}
+            onShowHud={() => onHudChange(true)}
+          />
         );
     }
   };
@@ -696,7 +685,7 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
     <div className="relative h-full w-full" onClick={onEmptyClick}>
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
-          key={view}
+          key={showHud ? "volume-hud" : view}
           {...swapFade}
           className="absolute inset-x-0 top-0 mx-auto touch-pan-y"
           style={{ width: size.width, height: size.height }}
@@ -727,7 +716,15 @@ export const IslandMenu: React.FC<IslandMenuProps> = ({
             }
           }}
         >
-          {renderView()}
+          {showHud ? (
+            <VolumeHud
+              volume={sys.volume}
+              onChange={sys.setVolume}
+              onClose={() => onHudChange(false)}
+            />
+          ) : (
+            renderView()
+          )}
         </motion.div>
       </AnimatePresence>
     </div>

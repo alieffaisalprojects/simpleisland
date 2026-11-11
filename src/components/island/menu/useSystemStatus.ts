@@ -1,7 +1,7 @@
 /**
  * File: useSystemStatus.ts
  * Kegunaan: status native laptop untuk menu island.
- * Isi: baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat, mode daya.
+ * Isi: baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat, volume.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -35,16 +35,15 @@ export interface RadiosStatus {
   airplane: boolean;
 }
 
-/** Power mode Windows: hemat daya, seimbang, performa tinggi */
-export type PowerMode = "saver" | "balanced" | "performance";
-
-export interface PowerModeStatus {
-  /** false bila Windows ini tidak punya pengaturan power mode */
+export interface VolumeStatus {
+  /** false bila tidak ada perangkat audio keluaran */
   supported: boolean;
-  mode: PowerMode;
+  /** 0..100 */
+  level: number;
+  muted: boolean;
 }
 
-const EMPTY_POWER: PowerModeStatus = { supported: false, mode: "balanced" };
+const EMPTY_VOLUME: VolumeStatus = { supported: false, level: 0, muted: false };
 
 const EMPTY_STATUS: SystemStatus = {
   battery: { present: false, percent: 0, charging: false, plugged: false },
@@ -64,12 +63,14 @@ const EMPTY_RADIOS: RadiosStatus = {
 export function useSystemStatus() {
   const [status, setStatus] = useState<SystemStatus>(EMPTY_STATUS);
   const [radios, setRadios] = useState<RadiosStatus>(EMPTY_RADIOS);
-  const [power, setPower] = useState<PowerModeStatus>(EMPTY_POWER);
+  const [volume, setVolumeState] = useState<VolumeStatus>(EMPTY_VOLUME);
 
   const alive = useRef(true);
   const loading = useRef(false);
   const version = useRef(0);
-  const powerVersion = useRef(0);
+  const volBusy = useRef(false);
+  const volPending = useRef<number | null>(null);
+  const volTouched = useRef(0);
 
   const refreshRadios = useCallback(async () => {
     if (loading.current) return;
@@ -85,13 +86,20 @@ export function useSystemStatus() {
     }
   }, []);
 
-  const refreshPower = useCallback(async () => {
-    const v = powerVersion.current;
+  // baca volume asli (ikut berubah bila volume diubah manual di laptop)
+  const refreshVolume = useCallback(async () => {
+    if (volBusy.current || Date.now() - volTouched.current < 700) return;
     try {
-      const p = await invoke<PowerModeStatus>("power_mode_get");
-      if (alive.current && v === powerVersion.current) setPower(p);
+      const v = await invoke<VolumeStatus>("system_volume_get");
+      if (
+        alive.current &&
+        !volBusy.current &&
+        Date.now() - volTouched.current >= 700
+      ) {
+        setVolumeState(v);
+      }
     } catch (e) {
-      console.error("power_mode_get gagal:", e);
+      console.error("system_volume_get gagal:", e);
     }
   }, []);
 
@@ -109,19 +117,20 @@ export function useSystemStatus() {
 
     void tick();
     void refreshRadios();
-    void refreshPower();
+    void refreshVolume();
     const fast = window.setInterval(tick, 1000);
     const slow = window.setInterval(() => {
       void refreshRadios();
-      void refreshPower();
     }, 4000);
+    const vol = window.setInterval(() => void refreshVolume(), 600);
 
     return () => {
       alive.current = false;
       window.clearInterval(fast);
       window.clearInterval(slow);
+      window.clearInterval(vol);
     };
-  }, [refreshRadios, refreshPower]);
+  }, [refreshRadios, refreshVolume]);
 
   // ubah radio: tampilan langsung berubah, lalu disamakan dengan kondisi asli
   const change = useCallback(
@@ -184,31 +193,42 @@ export function useSystemStatus() {
     [change],
   );
 
-  // ubah power mode: tampilan langsung berubah, lalu disamakan dengan kondisi asli
-  const setPowerMode = useCallback(
-    async (mode: PowerMode) => {
-      powerVersion.current += 1;
-      setPower((prev) => ({ ...prev, mode }));
-      try {
-        await invoke("power_mode_set", { mode });
-      } catch (e) {
-        console.error("power_mode_set gagal:", e);
+  // ubah volume: tampilan langsung berubah, perintah dikirim berurutan (nilai terbaru menang)
+  const setVolume = useCallback((level: number) => {
+    const next = Math.max(0, Math.min(100, Math.round(level)));
+    volTouched.current = Date.now();
+    setVolumeState((prev) => ({
+      ...prev,
+      level: next,
+      muted: next > 0 ? false : prev.muted,
+    }));
+    volPending.current = next;
+    if (volBusy.current) return;
+    volBusy.current = true;
+    void (async () => {
+      while (volPending.current !== null) {
+        const l = volPending.current;
+        volPending.current = null;
+        try {
+          await invoke("system_volume_set", { level: l });
+        } catch (e) {
+          console.error("system_volume_set gagal:", e);
+        }
       }
-      powerVersion.current += 1;
-      void refreshPower();
-    },
-    [refreshPower],
-  );
+      volBusy.current = false;
+      volTouched.current = Date.now();
+    })();
+  }, []);
 
   return {
     status,
     radios,
-    power,
+    volume,
     refreshRadios,
     setWifi,
     setBluetooth,
     setAirplane,
-    setPowerMode,
+    setVolume,
   };
 }
 

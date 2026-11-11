@@ -69,6 +69,7 @@ import {
 } from "./dynamic_island/constants";
 import { useIslandVolume } from "./dynamic_island/useIslandVolume";
 import { IslandMenu } from "./menu/IslandMenu";
+import { VOLUME_HUD_H, VOLUME_HUD_W } from "./menu/VolumeHud";
 import { useStopwatchRunning } from "./menu/stopwatchStore";
 
 interface DynamicIslandProps {
@@ -102,6 +103,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const [expandedBase, setExpanded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false); // menu klik kanan
   const [menuView, setMenuView] = useState<MenuView>("home");
+  const [menuHud, setMenuHud] = useState(false); // HUD volume dari menu
   const expanded = expandedBase || menuOpen;
   const stopwatchRunning = useStopwatchRunning();
   const [lyricsMode, setLyricsMode] = useState(false);
@@ -204,12 +206,17 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     (isMini ? S.mini.height : COMPACT_HEIGHT) + adj.h,
   );
 
-  const { width: expandedWidth, height: expandedHeight } = getExpandedSize(
-    kind,
-    lyricsMode,
-    getFilePanelSize(fileIsland.actions.length),
-    MENU_SIZES[menuView],
-  );
+  // HUD volume: menu disembunyikan, island menjadi pil horizontal
+  const hudMode = kind === "menu" && menuView === "home" && menuHud;
+
+  const { width: expandedWidth, height: expandedHeight } = hudMode
+    ? { width: VOLUME_HUD_W, height: VOLUME_HUD_H }
+    : getExpandedSize(
+        kind,
+        lyricsMode,
+        getFilePanelSize(fileIsland.actions.length),
+        MENU_SIZES[menuView],
+      );
 
   // ---- gaya island ----
   // pill  : melayang
@@ -222,12 +229,19 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // pil kedua turun
   const secTop = islandTop + (flush ? 6 : 0);
 
+  // pil HUD volume: sudut penuh seperti kapsul
+  const hudRadius = VOLUME_HUD_H / 2;
+
   const bottomRadius = flush
     ? expanded
-      ? 34
+      ? hudMode
+        ? hudRadius
+        : 34
       : Math.min(18, collapsedHeight / 2)
     : expanded
-      ? 40
+      ? hudMode
+        ? hudRadius
+        : 40
       : collapsedHeight / 2;
 
   const topRadius = flush ? 0 : bottomRadius;
@@ -277,8 +291,14 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     if (lockedRef.current || forceMini) return;
     setExpanded(false);
     setMenuView("home");
+    setMenuHud(false);
     setMenuOpen(true);
   };
+
+  // menu tertutup (klik luar, blur, klik kanan, dll.): HUD volume ikut reset
+  useEffect(() => {
+    if (!menuOpen) setMenuHud(false);
+  }, [menuOpen]);
 
   // klik kanan pada island: buka menu (kapan saja), klik kanan lagi: tutup
   const handleContextMenu = (event: React.MouseEvent) => {
@@ -316,6 +336,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // ---- Window Tauri ----
 
   const prevExpanded = useRef(expanded);
+  const appliedHeight = useRef(0); // tinggi window yang terakhir diterapkan
 
   // selisih tinggi terbesar antara compact dan mini (untuk tinggi window)
   const adjCompactH = sizeOf(settings, settings.style, "compact").h;
@@ -331,16 +352,21 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     const targetHeight =
       (expanded ? expandedHeight + 24 : COMPACT_WINDOW_HEIGHT) + extra;
 
-    const apply = () =>
-      invoke("island_set_height", { height: targetHeight }).catch((e) =>
+    const apply = () => {
+      appliedHeight.current = targetHeight;
+      return invoke("island_set_height", { height: targetHeight }).catch((e) =>
         console.error("Gagal mengatur window island:", e),
       );
+    };
 
     const collapsing = prevExpanded.current && !expanded;
     prevExpanded.current = expanded;
 
+    // window lebih kecil dari sebelumnya (menutup, atau menu -> HUD volume)
+    const shrinking = targetHeight < appliedHeight.current;
+
     // kecilkan setelah animasi
-    if (collapsing) {
+    if (collapsing || shrinking) {
       const timer = window.setTimeout(apply, 460);
       return () => window.clearTimeout(timer);
     }
@@ -768,6 +794,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
                 onBusyChange={(busy) => {
                   menuBusyRef.current = busy;
                 }}
+                hud={menuHud}
+                onHudChange={setMenuHud}
               />
             </MorphLayer>
           </AnimatePresence>

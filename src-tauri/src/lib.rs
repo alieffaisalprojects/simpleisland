@@ -64,6 +64,16 @@ fn island_set_hit_rects(rects: Vec<[f64; 4]>) {
     }
 }
 
+// Area klik tambahan di luar pil island (HUD volume terpisah).
+static EXTRA_RECT: Mutex<Option<[f64; 4]>> = Mutex::new(None);
+
+#[tauri::command]
+fn island_set_extra_rect(rect: Option<[f64; 4]>) {
+    if let Ok(mut guard) = EXTRA_RECT.lock() {
+        *guard = rect;
+    }
+}
+
 // Atur posisi dan ukuran window island.
 fn place_island(window: &WebviewWindow, logical_height: f64) -> Result<(), String> {
     let monitor = match window.primary_monitor() {
@@ -877,6 +887,26 @@ mod volume {
         }
     }
 
+    // Atur volume sistem ke nilai tertentu (0.0 - 1.0).
+    pub fn set(value: f32) -> Result<f32, String> {
+        let _guard = STEP_LOCK.lock().map_err(|e| e.to_string())?;
+        let ep = endpoint()?;
+        let target = value.clamp(0.0, 1.0);
+
+        unsafe {
+            ep.SetMasterVolumeLevelScalar(target, std::ptr::null())
+                .map_err(|e| e.to_string())?;
+
+            // Mengatur volume di atas nol otomatis membatalkan mute.
+            if target > 0.0 {
+                let _ = ep.SetMute(BOOL(0), std::ptr::null());
+            }
+
+            ep.GetMasterVolumeLevelScalar()
+                .map_err(|e| e.to_string())
+        }
+    }
+
     // Geser volume sebesar `delta`, lalu kembalikan nilai akhirnya.
     pub fn step(delta: f32) -> Result<f32, String> {
         let _guard = STEP_LOCK.lock().map_err(|e| e.to_string())?;
@@ -917,6 +947,23 @@ async fn volume_get() -> Result<f32, String> {
     Err("Hanya tersedia di Windows".to_string())
 }
 
+// Atur volume sistem ke nilai tertentu (0.0 - 1.0).
+#[tauri::command]
+async fn volume_set(value: f32) -> Result<f32, String> {
+    #[cfg(windows)]
+    {
+        return tauri::async_runtime::spawn_blocking(move || volume::set(value))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = value;
+        Err("Hanya tersedia di Windows".to_string())
+    }
+}
+
 // Geser volume sistem, kembalikan volume akhir (0.0 - 1.0).
 #[tauri::command]
 async fn volume_step(delta: f32) -> Result<f32, String> {
@@ -940,7 +987,7 @@ async fn volume_step(delta: f32) -> Result<f32, String> {
 
 #[cfg(windows)]
 mod hit_test {
-    use super::HIT_RECTS;
+    use super::{EXTRA_RECT, HIT_RECTS};
     use std::ffi::c_void;
     use std::time::Duration;
     use tauri::WebviewWindow;
@@ -971,10 +1018,17 @@ mod hit_test {
             dpi as f64 / 96.0
         };
 
-        let rects = match HIT_RECTS.lock() {
+        let mut rects = match HIT_RECTS.lock() {
             Ok(guard) => guard.clone(),
             Err(_) => return Vec::new(),
         };
+
+        // HUD volume terpisah
+        if let Ok(guard) = EXTRA_RECT.lock() {
+            if let Some(r) = *guard {
+                rects.push(r);
+            }
+        }
 
         rects
             .iter()
@@ -1560,9 +1614,11 @@ pub fn run() {
             media_previous,
             media_seek,
             volume_get,
+            volume_set,
             volume_step,
             island_set_height,
             island_set_hit_rects,
+            island_set_extra_rect,
             radial_overlay::radial_overlay_keep,
             island_show_menu,
             island_native::http_request,
@@ -1589,6 +1645,8 @@ pub fn run() {
             system_status::system_status,
             system_status::power_status,
             system_status::system_radios,
+            system_status::system_volume_get,
+            system_status::system_volume_set,
             system_status::system_radio_set,
             system_status::system_airplane_set,
             system_status::wifi_list,
@@ -1660,4 +1718,4 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
+    }
