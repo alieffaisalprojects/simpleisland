@@ -1,7 +1,7 @@
 /**
  * File: useSystemStatus.ts
  * Kegunaan: status native laptop untuk menu island.
- * Isi: baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat.
+ * Isi: baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat, mode daya.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -35,6 +35,17 @@ export interface RadiosStatus {
   airplane: boolean;
 }
 
+/** Power mode Windows: hemat daya, seimbang, performa tinggi */
+export type PowerMode = "saver" | "balanced" | "performance";
+
+export interface PowerModeStatus {
+  /** false bila Windows ini tidak punya pengaturan power mode */
+  supported: boolean;
+  mode: PowerMode;
+}
+
+const EMPTY_POWER: PowerModeStatus = { supported: false, mode: "balanced" };
+
 const EMPTY_STATUS: SystemStatus = {
   battery: { present: false, percent: 0, charging: false, plugged: false },
   net: { down: 0, up: 0 },
@@ -53,10 +64,12 @@ const EMPTY_RADIOS: RadiosStatus = {
 export function useSystemStatus() {
   const [status, setStatus] = useState<SystemStatus>(EMPTY_STATUS);
   const [radios, setRadios] = useState<RadiosStatus>(EMPTY_RADIOS);
+  const [power, setPower] = useState<PowerModeStatus>(EMPTY_POWER);
 
   const alive = useRef(true);
   const loading = useRef(false);
   const version = useRef(0);
+  const powerVersion = useRef(0);
 
   const refreshRadios = useCallback(async () => {
     if (loading.current) return;
@@ -69,6 +82,16 @@ export function useSystemStatus() {
       console.error("system_radios gagal:", e);
     } finally {
       loading.current = false;
+    }
+  }, []);
+
+  const refreshPower = useCallback(async () => {
+    const v = powerVersion.current;
+    try {
+      const p = await invoke<PowerModeStatus>("power_mode_get");
+      if (alive.current && v === powerVersion.current) setPower(p);
+    } catch (e) {
+      console.error("power_mode_get gagal:", e);
     }
   }, []);
 
@@ -86,15 +109,19 @@ export function useSystemStatus() {
 
     void tick();
     void refreshRadios();
+    void refreshPower();
     const fast = window.setInterval(tick, 1000);
-    const slow = window.setInterval(refreshRadios, 4000);
+    const slow = window.setInterval(() => {
+      void refreshRadios();
+      void refreshPower();
+    }, 4000);
 
     return () => {
       alive.current = false;
       window.clearInterval(fast);
       window.clearInterval(slow);
     };
-  }, [refreshRadios]);
+  }, [refreshRadios, refreshPower]);
 
   // ubah radio: tampilan langsung berubah, lalu disamakan dengan kondisi asli
   const change = useCallback(
@@ -157,13 +184,31 @@ export function useSystemStatus() {
     [change],
   );
 
+  // ubah power mode: tampilan langsung berubah, lalu disamakan dengan kondisi asli
+  const setPowerMode = useCallback(
+    async (mode: PowerMode) => {
+      powerVersion.current += 1;
+      setPower((prev) => ({ ...prev, mode }));
+      try {
+        await invoke("power_mode_set", { mode });
+      } catch (e) {
+        console.error("power_mode_set gagal:", e);
+      }
+      powerVersion.current += 1;
+      void refreshPower();
+    },
+    [refreshPower],
+  );
+
   return {
     status,
     radios,
+    power,
     refreshRadios,
     setWifi,
     setBluetooth,
     setAirplane,
+    setPowerMode,
   };
 }
 

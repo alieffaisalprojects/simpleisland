@@ -271,7 +271,7 @@ fn run_action(action: &str, paths: &[String]) -> Result<ActionResult, String> {
 
         "trash" => {
             trash(paths)?;
-            Ok(done("Dipindah ke Recycle Bin", None))
+            Ok(done("Dihapus ke Recycle Bin", None))
         }
 
         "terminal" => {

@@ -1,6 +1,8 @@
 mod island_native; // Timer Clock Windows dan HTTP request
 mod file_actions; // Aksi file untuk drag & drop ke island
 mod file_convert; // Konversi ICO / PDF / Word + folder Explorer aktif
+mod file_crop; // Crop gambar untuk menu radial
+mod radial_overlay; // Menu radial di sekitar file yang diseret (jendela transparan layar penuh)
 mod settings; // Halaman Pengaturan (Umum + Tampilan)
 mod spectrum; // Spektrum audio asli (loopback + FFT) untuk widget Spotify
 mod system_status; // Baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat
@@ -1057,7 +1059,9 @@ mod hit_test {
 
                 // Tombol ditekan dari luar (mis. menyeret file dari Explorer):
                 // zona tangkap ikut aktif supaya island bisa menerima drag
+                // Gaya Radial: menunya di kursor, island tidak perlu menangkap drag
                 let catch = down
+                    && !crate::radial_overlay::mode_on()
                     && drop_zone(island)
                         .map(|zone| point_in_any(&pt, &[zone]))
                         .unwrap_or(false);
@@ -1559,6 +1563,7 @@ pub fn run() {
             volume_step,
             island_set_height,
             island_set_hit_rects,
+            radial_overlay::radial_overlay_keep,
             island_show_menu,
             island_native::http_request,
             island_native::clock_dump,
@@ -1575,6 +1580,8 @@ pub fn run() {
             file_actions::file_properties,
             file_convert::file_convert,
             file_convert::file_explorer_folder,
+            file_crop::file_crop_preview,
+            file_crop::file_crop_apply,
             settings::settings_get,
             settings::settings_save,
             settings::settings_recenter,
@@ -1635,6 +1642,9 @@ pub fn run() {
 
             // Tangkap audio sistem untuk spektrum (aktif hanya saat diminta frontend).
             spectrum::start(app.handle().clone());
+
+            // Pantau drag file dari Explorer / Desktop untuk menu radial.
+            radial_overlay::start(app.handle().clone());
 
             #[cfg(windows)]
             {

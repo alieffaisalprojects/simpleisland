@@ -13,6 +13,9 @@ import { listen } from "@tauri-apps/api/event";
 
 export type IslandStyle = "pill" | "notch" | "tab";
 
+// Gaya menu saat file diseret ke island: kotak-kotak atau radial
+export type FileMenuStyle = "tiles" | "radial";
+
 // Kondisi island yang ukurannya bisa diatur:
 //   compact : island kecil saat ada aktivitas (musik, timer, file, dll.)
 //   mini    : island paling kecil saat idle / tidak ada aktivitas
@@ -25,6 +28,7 @@ export interface AppSettings {
   autostart: boolean;
   fileDrop: boolean;
   fileSounds: boolean;
+  fileMenuStyle: FileMenuStyle;
 
   // Tampilan
   style: IslandStyle;
@@ -75,9 +79,7 @@ export const SIZE_KEYS = {
   },
 } as const;
 
-type SizeKey = (typeof SIZE_KEYS)[IslandStyle][SizeMode][
-  | "w"
-  | "h"];
+type SizeKey = (typeof SIZE_KEYS)[IslandStyle][SizeMode]["w" | "h"];
 
 // Semua selisih ukuran = 0 (ukuran bawaan)
 const DEFAULT_SIZES: Pick<AppSettings, SizeKey> = {
@@ -100,6 +102,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autostart: false,
   fileDrop: true,
   fileSounds: true,
+  fileMenuStyle: "tiles",
   style: "pill",
   shoulder: 14,
   pillTop: 0,
@@ -128,22 +131,28 @@ export function sizeOf(
   return { w: s[keys.w], h: s[keys.h] };
 }
 
-export const STYLE_OPTIONS: { id: IslandStyle; label: string; desc: string }[] = [
-  {
-    id: "pill",
-    label: "Dynamic Island",
-    desc: "Melayang di atas layar, berbentuk pil seperti Dynamic Island iPhone.",
-  },
-  {
-    id: "notch",
-    label: "Notch",
-    desc: "Menempel di tepi atas dengan bahu kiri-kanan, seperti notch MacBook.",
-  },
-  {
-    id: "tab",
-    label: "Tab",
-    desc: "Menempel di tepi atas, sudut atas rata tanpa bahu.",
-  },
+export const STYLE_OPTIONS: { id: IslandStyle; label: string; desc: string }[] =
+  [
+    {
+      id: "pill",
+      label: "Dynamic Island",
+      desc: "Melayang di atas layar, berbentuk pil seperti Dynamic Island iPhone.",
+    },
+    {
+      id: "notch",
+      label: "Notch",
+      desc: "Menempel di tepi atas dengan bahu kiri-kanan, seperti notch MacBook.",
+    },
+    {
+      id: "tab",
+      label: "Tab",
+      desc: "Menempel di tepi atas, sudut atas rata tanpa bahu.",
+    },
+  ];
+
+export const FILE_MENU_OPTIONS: { id: FileMenuStyle; label: string }[] = [
+  { id: "tiles", label: "Kotak" },
+  { id: "radial", label: "Radial" },
 ];
 
 const errorText = (e: unknown) => (typeof e === "string" ? e : String(e));

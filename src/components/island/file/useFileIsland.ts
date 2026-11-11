@@ -25,6 +25,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Crop } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -40,7 +41,7 @@ import { playSound, preloadSounds } from "./sounds";
 export type TileStatus = "running" | "done" | "error";
 
 // Tampilan panel
-export type PanelView = "menu" | "rename" | "props";
+export type PanelView = "menu" | "rename" | "props" | "crop";
 
 interface RawMeta {
   path: string;
@@ -100,6 +101,32 @@ export interface PendingPaste {
 
 const NO_TOOLS: FileTools = { rar: false, sevenZip: false, ffmpeg: false };
 
+// Crop: hanya satu gambar (jpg, png, webp, bmp)
+const CROP_EXT = new Set(["jpg", "jpeg", "png", "webp", "bmp"]);
+
+// Tambahkan aksi Crop ke daftar aksi (urutan ke-4, supaya ada di halaman pertama)
+function withCrop(
+  list: FileAction[],
+  items: FileItem[],
+  on: boolean,
+): FileAction[] {
+  if (!on || items.length !== 1 || items[0].isDir) return list;
+  if (!CROP_EXT.has(items[0].ext.toLowerCase().replace(/^\./, ""))) return list;
+  if (list.some((a) => a.id === "crop")) return list;
+
+  const crop = {
+    id: "crop",
+    label: "Crop",
+    tone: "neutral",
+    Icon: Crop,
+  } as unknown as FileAction;
+
+  const next = [...list];
+  next.splice(Math.min(3, next.length), 0, crop);
+
+  return next;
+}
+
 // Setelah aksi sukses, island menutup sendiri setelah jeda singkat
 const CLOSE_AFTER_DONE_MS = 1100;
 
@@ -151,12 +178,31 @@ function actionAt(pos: { x: number; y: number }): string | null {
 interface FileIslandOptions {
   enabled?: boolean; // false: seret & lepas file dimatikan (Pengaturan > Umum)
   sounds?: boolean; // false: tanpa suara efek (Pengaturan > Umum)
+  // true: event "leave" tidak menutup menu (menu radial tetap aktif saat file
+  // diseret keluar dari lingkaran; Rust yang menutupnya saat tombol dilepas)
+  keepOnLeave?: () => boolean;
+  // false: aksi berbahaya (Hapus) langsung jalan saat dilepas, tanpa konfirmasi
+  confirmDanger?: boolean;
+  // true: gambar tunggal mendapat aksi Crop (tampilan crop ada di menu radial)
+  crop?: boolean;
 }
 
 export function useFileIsland({
   enabled = true,
   sounds = true,
+  keepOnLeave,
+  confirmDanger = true,
+  crop = false,
 }: FileIslandOptions = {}) {
+  const cropOnRef = useRef(crop);
+  cropOnRef.current = crop;
+
+  const keepOnLeaveRef = useRef(keepOnLeave);
+  keepOnLeaveRef.current = keepOnLeave;
+
+  const confirmDangerRef = useRef(confirmDanger);
+  confirmDangerRef.current = confirmDanger;
+
   // Suara bisa dimatikan dari Pengaturan
   const soundsRef = useRef(sounds);
   soundsRef.current = sounds;
@@ -197,8 +243,8 @@ export function useFileIsland({
   toolsRef.current = tools;
 
   const actions: FileAction[] = useMemo(
-    () => buildActions(items, tools),
-    [items, tools],
+    () => withCrop(buildActions(items, tools), items, crop),
+    [items, tools, crop],
   );
 
   // Sorot kotak; bunyi choose tiap berpindah ke kotak baru
@@ -234,6 +280,16 @@ export function useFileIsland({
     setStatus({});
     setMessage(null);
     setView("rename");
+    invoke("island_focus").catch(() => {});
+  }, []);
+
+  // Buka tampilan Crop
+  const openCrop = useCallback(() => {
+    window.clearTimeout(closeTimer.current);
+    setArmedId(null);
+    setStatus({});
+    setMessage(null);
+    setView("crop");
     invoke("island_focus").catch(() => {});
   }, []);
 
@@ -276,10 +332,17 @@ export function useFileIsland({
   // Jalankan satu aksi di Rust
   const execute = useCallback(
     async (actionId: string, list: FileItem[]) => {
-      const action = buildActions(list, toolsRef.current).find(
-        (a) => a.id === actionId,
-      );
+      const action = withCrop(
+        buildActions(list, toolsRef.current),
+        list,
+        cropOnRef.current,
+      ).find((a) => a.id === actionId);
       if (!action || list.length === 0) return;
+
+      if (actionId === "crop") {
+        openCrop();
+        return;
+      }
 
       // Rename dan Properti punya tampilan sendiri, bukan aksi satu klik
       if (actionId === "rename") {
@@ -326,7 +389,7 @@ export function useFileIsland({
         setMessage(errorText(e, "Aksi gagal"));
       }
     },
-    [clear, openRename, openProps],
+    [clear, openRename, openProps, openCrop],
   );
 
   const executeRef = useRef(execute);
@@ -377,6 +440,39 @@ export function useFileIsland({
     [clear],
   );
 
+  // Tombol "Apply" di tampilan Crop: potong gambar, simpan sebagai <nama>_crop
+  const cropRun = useCallback(
+    async (rect: { x: number; y: number; width: number; height: number }) => {
+      const item = itemsRef.current[0];
+      if (!item || renameBusy.current) return;
+
+      renameBusy.current = true;
+      window.clearTimeout(closeTimer.current);
+      setMessage(null);
+      setStatus({ crop: "running" });
+
+      try {
+        const res = await invoke<ActionResult>("file_crop_apply", {
+          path: item.path,
+          ...rect,
+        });
+
+        setView("menu");
+        setStatus({ crop: "done" });
+        setMessage(res.message);
+        play("checklist");
+        closeTimer.current = window.setTimeout(clear, CLOSE_AFTER_DONE_MS);
+      } catch (e) {
+        // Tetap di tampilan Crop supaya area bisa diperbaiki
+        setStatus({});
+        setMessage(errorText(e, "Gagal crop gambar"));
+      } finally {
+        renameBusy.current = false;
+      }
+    },
+    [clear],
+  );
+
   // Tempel file. "here" = folder Explorer yang sedang dibuka,
   // "browse" = pilih folder lewat dialog.
   const startPaste = useCallback(async (where: "here" | "browse") => {
@@ -409,7 +505,10 @@ export function useFileIsland({
             dest: undefined,
             message: undefined,
           });
-          dest = await invoke<string | null>("file_explorer_folder");
+          // folder Explorer yang sedang dibuka
+          dest = await invoke<string | null>("file_explorer_folder").catch(
+            () => null,
+          );
         }
       } catch (e) {
         if (stale()) return;
@@ -488,6 +587,14 @@ export function useFileIsland({
     setPaste(null);
   }, []);
 
+  // Terima salinan / potongan dari menu radial (jendela lain): pil Paste menggantung di island
+  const adoptPaste = useCallback((list: FileItem[], mode: "copy" | "cut") => {
+    if (list.length === 0) return;
+
+    window.clearTimeout(pasteTimer.current);
+    setPaste({ items: list, mode, phase: "ready" });
+  }, []);
+
   // Siapkan suara sekali saja
   useEffect(() => {
     void preloadSounds();
@@ -546,6 +653,12 @@ export function useFileIsland({
             break;
 
           case "leave":
+            if (keepOnLeaveRef.current?.()) {
+              // tetap aktif: hanya hilangkan sorotan irisan
+              setHover(null);
+              break;
+            }
+
             clear();
             break;
 
@@ -578,13 +691,22 @@ export function useFileIsland({
               const target = actionAt(p.position);
               if (!target) break; // dilepas di luar kotak: menu tetap terbuka
 
-              const action = buildActions(list, toolsRef.current).find(
-                (a) => a.id === target,
-              );
+              // dilepas di lingkaran tengah (Batalkan): tutup menu tanpa aksi
+              if (target === "cancel") {
+                clear();
+                break;
+              }
+
+              const action = withCrop(
+                buildActions(list, toolsRef.current),
+                list,
+                cropOnRef.current,
+              ).find((a) => a.id === target);
               if (!action) break;
 
               // Aksi berbahaya tidak langsung jalan saat dilepas: harus diklik
-              if (action.tone === "danger") setArmedId(target);
+              if (action.tone === "danger" && confirmDangerRef.current)
+                setArmedId(target);
               else void executeRef.current(target, list);
             } catch (e) {
               console.error("Gagal memproses file yang dilepas:", e);
@@ -626,9 +748,12 @@ export function useFileIsland({
     clear,
     back: backToMenu,
     renameRun,
+    cropRun,
     pasteRun,
     pasteBrowse,
     pasteDismiss,
+    adoptPaste,
+    play, // suara efek (ikut pengaturan), dipakai menu radial untuk hover mouse
   };
 }
 

@@ -41,6 +41,9 @@ static ISLAND_ENABLED: AtomicBool = AtomicBool::new(false);
 
 const STYLES: [&str; 3] = ["pill", "notch", "tab"];
 
+// Gaya menu saat file diseret: kotak-kotak atau radial
+const FILE_MENU_STYLES: [&str; 2] = ["tiles", "radial"];
+
 // Batas offset ukuran island (px dari ukuran bawaan)
 const WIDTH_RANGE: (i32, i32) = (-30, 60);
 const HEIGHT_RANGE: (i32, i32) = (-8, 20);
@@ -62,6 +65,8 @@ pub struct Settings {
     pub autostart: bool,
     pub file_drop: bool,
     pub file_sounds: bool,
+    // Gaya menu file: "tiles" | "radial"
+    pub file_menu_style: String,
 
     // Tampilan: "pill" | "notch" | "tab"
     pub style: String,
@@ -94,6 +99,7 @@ impl Default for Settings {
             autostart: false,
             file_drop: true,
             file_sounds: true,
+            file_menu_style: "tiles".to_string(),
             style: "pill".to_string(),
             shoulder: 14,
             pill_compact_width: 0,
@@ -117,6 +123,10 @@ impl Settings {
     fn sanitized(mut self) -> Self {
         if !STYLES.contains(&self.style.as_str()) {
             self.style = "pill".to_string();
+        }
+
+        if !FILE_MENU_STYLES.contains(&self.file_menu_style.as_str()) {
+            self.file_menu_style = "tiles".to_string();
         }
 
         self.shoulder = self.shoulder.clamp(8, 24);

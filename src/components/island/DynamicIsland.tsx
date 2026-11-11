@@ -15,6 +15,7 @@ import { TimerCompact, TimerExpanded, TimerPill } from "./ClockTimerView";
 import { SystemWidget } from "../modules/SystemWidget";
 import { FileActionsPanel, getFilePanelSize } from "./file/FileActionsPanel";
 import { FilePastePill } from "./file/FilePastePill";
+import type { FileItem } from "./file/catalog";
 import { useFileIsland } from "./file/useFileIsland";
 import { IslandShoulders } from "./IslandShoulders";
 import { sizeOf, useSettings } from "../../settings/settings";
@@ -148,12 +149,18 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // pengaturan
   const { settings } = useSettings();
 
+  // Gaya Radial: menu muncul di kursor lewat jendela "radial", jadi island tidak ikut
+  // mendengarkan drag file (kalau ikut, dua menu muncul sekaligus)
   const fileIsland = useFileIsland({
-    enabled: settings.fileDrop,
+    enabled: settings.fileDrop && settings.fileMenuStyle !== "radial",
     sounds: settings.fileSounds,
   });
   const file = fileIsland.active ? fileIsland : null;
   const system = activeWidget === "system" ? systemNotification : null;
+
+  // dibaca listener (salinan dari menu radial)
+  const fileIslandRef = useRef(fileIsland);
+  fileIslandRef.current = fileIsland;
 
   const timerFocused =
     !file && !system && timerOn && (pick === "timer" || !hasMedia);
@@ -488,6 +495,28 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     )
       .then((stop) => (cancelled ? stop() : (unlisten = stop)))
       .catch((error) => console.error("island-behind listener failed:", error));
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // salin / potong dari menu radial (jendela lain): pil Paste menggantung di island
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    listen<{ items: FileItem[]; mode: "copy" | "cut" }>(
+      "radial-paste",
+      (event) =>
+        fileIslandRef.current.adoptPaste(
+          event.payload.items,
+          event.payload.mode,
+        ),
+    )
+      .then((stop) => (cancelled ? stop() : (unlisten = stop)))
+      .catch((error) => console.error("radial-paste listener failed:", error));
 
     return () => {
       cancelled = true;

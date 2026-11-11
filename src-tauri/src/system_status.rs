@@ -1,16 +1,18 @@
 // File: system_status.rs
 // Kegunaan: status native laptop untuk menu island.
-// Isi: baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat.
+// Isi: baterai, kecepatan jaringan, Wi-Fi, Bluetooth, mode pesawat, mode daya.
 
 use serde::Serialize;
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::ffi::c_void;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use windows::Devices::Bluetooth::{BluetoothConnectionStatus, BluetoothDevice};
 use windows::Devices::Enumeration::DeviceInformation;
 use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
+use windows::core::GUID;
 use windows::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfTable2, MIB_IF_TABLE2};
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
 
@@ -405,6 +407,138 @@ pub async fn system_airplane_set(on: bool) -> Result<(), String> {
         }
 
         last_err.map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(err)?
+}
+
+// ---------------------------------------------------------------------------
+// Mode daya (Settings > System > Power > Power mode)
+// ---------------------------------------------------------------------------
+//
+// Windows 10 1709+ / Windows 11 menyimpan "power mode" sebagai overlay scheme di
+// powrprof.dll. Fungsinya tidak ada di import library SDK, jadi dimuat saat
+// dijalankan lewat LoadLibrary + GetProcAddress (tanpa fitur windows-rs tambahan).
+// Hasilnya sama dengan slider Power mode di Pengaturan Windows dan tidak butuh admin.
+
+// Hemat daya (Best power efficiency / Better battery)
+const OVERLAY_SAVER: GUID = GUID::from_u128(0x961cc777_2547_4f9d_8174_7d86181b8a7a);
+// Seimbang (tanpa overlay)
+const OVERLAY_BALANCED: GUID = GUID::from_u128(0);
+// Performa lebih baik (Windows 10 "Better performance"), dianggap performa tinggi
+const OVERLAY_BETTER: GUID = GUID::from_u128(0x3af9b8d9_7c97_431d_ad78_34a8bfea439f);
+// Performa terbaik (Best performance)
+const OVERLAY_PERFORMANCE: GUID = GUID::from_u128(0xded574b5_45a0_4f42_8737_46345c09c238);
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LoadLibraryW(name: *const u16) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+}
+
+type GetOverlayFn = unsafe extern "system" fn(*mut GUID) -> u32;
+type SetOverlayFn = unsafe extern "system" fn(GUID) -> u32;
+
+struct OverlayApi {
+    get: GetOverlayFn,
+    set: SetOverlayFn,
+}
+
+// dimuat sekali; None bila Windows ini tidak punya fungsi overlay
+fn overlay_api() -> Option<&'static OverlayApi> {
+    static API: OnceLock<Option<OverlayApi>> = OnceLock::new();
+
+    API.get_or_init(|| unsafe {
+        let lib_name: Vec<u16> = "powrprof.dll\0".encode_utf16().collect();
+        let lib = LoadLibraryW(lib_name.as_ptr());
+        if lib.is_null() {
+            return None;
+        }
+
+        let get = GetProcAddress(lib, c"PowerGetActualOverlayScheme".as_ptr() as *const u8);
+        let set = GetProcAddress(lib, c"PowerSetActiveOverlayScheme".as_ptr() as *const u8);
+        if get.is_null() || set.is_null() {
+            return None;
+        }
+
+        Some(OverlayApi {
+            get: std::mem::transmute::<*mut c_void, GetOverlayFn>(get),
+            set: std::mem::transmute::<*mut c_void, SetOverlayFn>(set),
+        })
+    })
+    .as_ref()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerModeInfo {
+    supported: bool,
+    // "saver" | "balanced" | "performance"
+    mode: String,
+}
+
+fn mode_from_guid(g: &GUID) -> &'static str {
+    if *g == OVERLAY_SAVER {
+        "saver"
+    } else if *g == OVERLAY_PERFORMANCE || *g == OVERLAY_BETTER {
+        "performance"
+    } else {
+        // seimbang, atau overlay milik pabrikan yang tidak dikenal
+        "balanced"
+    }
+}
+
+fn read_power_mode() -> Result<&'static str, String> {
+    let api = overlay_api().ok_or_else(|| "Mode daya tidak didukung Windows ini".to_string())?;
+
+    let mut g = GUID::from_u128(0);
+    let code = unsafe { (api.get)(&mut g) };
+    if code != 0 {
+        return Err(format!("PowerGetActualOverlayScheme gagal (kode {code})"));
+    }
+
+    Ok(mode_from_guid(&g))
+}
+
+#[tauri::command]
+pub async fn power_mode_get() -> PowerModeInfo {
+    tauri::async_runtime::spawn_blocking(|| match read_power_mode() {
+        Ok(mode) => PowerModeInfo {
+            supported: true,
+            mode: mode.to_string(),
+        },
+        Err(_) => PowerModeInfo {
+            supported: false,
+            mode: "balanced".to_string(),
+        },
+    })
+    .await
+    .unwrap_or_else(|_| PowerModeInfo {
+        supported: false,
+        mode: "balanced".to_string(),
+    })
+}
+
+// "saver" | "balanced" | "performance"
+#[tauri::command]
+pub async fn power_mode_set(mode: String) -> Result<(), String> {
+    let target = match mode.as_str() {
+        "saver" => OVERLAY_SAVER,
+        "balanced" => OVERLAY_BALANCED,
+        "performance" => OVERLAY_PERFORMANCE,
+        _ => return Err(format!("Mode daya tidak dikenal: {mode}")),
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let api =
+            overlay_api().ok_or_else(|| "Mode daya tidak didukung Windows ini".to_string())?;
+
+        let code = unsafe { (api.set)(target) };
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(format!("PowerSetActiveOverlayScheme gagal (kode {code})"))
+        }
     })
     .await
     .map_err(err)?

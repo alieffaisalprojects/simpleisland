@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "radial-window",
+  "description": "Izin untuk jendela menu radial (label: radial). Tanpa ini jendela tidak boleh mendengarkan event drag & drop.",
+  "windows": ["radial"],
+  "permissions": ["core:default"]
+}

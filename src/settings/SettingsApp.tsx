@@ -8,6 +8,7 @@ import { IslandShoulders } from "../components/island/IslandShoulders";
 import { ISLAND_TOP } from "../components/island/dynamic_island/constants";
 import {
   DEFAULT_APPEARANCE,
+  FILE_MENU_OPTIONS,
   HEIGHT_MAX,
   HEIGHT_MIN,
   SHOULDER_MAX,
@@ -73,6 +74,38 @@ const Toggle: React.FC<{
       transition={{ type: "spring", stiffness: 520, damping: 32 }}
     />
   </button>
+);
+
+// pilihan satu dari beberapa (segmented)
+const Segmented: React.FC<{
+  value: string;
+  options: { id: string; label: string }[];
+  onChange: (id: string) => void;
+  disabled?: boolean;
+}> = ({ value, options, onChange, disabled }) => (
+  <div
+    role="radiogroup"
+    className={`flex shrink-0 rounded-[10px] bg-white/10 p-[3px] ${
+      disabled ? "pointer-events-none opacity-40" : ""
+    }`}
+  >
+    {options.map((o) => (
+      <button
+        key={o.id}
+        type="button"
+        role="radio"
+        aria-checked={value === o.id}
+        onClick={() => onChange(o.id)}
+        className={`h-[26px] rounded-[8px] px-3 text-[12px] font-medium transition ${
+          value === o.id
+            ? "bg-white text-[#050506] shadow"
+            : "text-white/70 hover:text-white"
+        }`}
+      >
+        {o.label}
+      </button>
+    ))}
+  </div>
 );
 
 const Card: React.FC<{ title?: string; children: React.ReactNode }> = ({
@@ -417,6 +450,21 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
             label="Seret dan lepas file"
             checked={settings.fileDrop}
             onChange={(v) => commit({ fileDrop: v })}
+          />
+        </Row>
+
+        <Row
+          icon={iconMenu}
+          title="Gaya Menu File"
+          desc="Kotak: menu muncul di island. Radial: menu muncul di sekitar file yang diseret dari Explorer atau Desktop."
+        >
+          <Segmented
+            value={settings.fileMenuStyle}
+            options={FILE_MENU_OPTIONS}
+            disabled={!settings.fileDrop}
+            onChange={(id) =>
+              commit({ fileMenuStyle: id as AppSettings["fileMenuStyle"] })
+            }
           />
         </Row>
 
@@ -836,8 +884,8 @@ const InstallPage: React.FC = () => {
         </div>
         <p className="mt-[3px] text-[14px] leading-[1.5] text-slate-600">
           Peringatan ini muncul karena berkas installer belum dipublikasikan
-          dengan sertifikat berbayar. Saya menjamin keamanan aplikasi ini. Silakan
-          ikuti panduan berikut untuk melanjutkan proses instalasi.
+          dengan sertifikat berbayar. Saya menjamin keamanan aplikasi ini.
+          Silakan ikuti panduan berikut untuk melanjutkan proses instalasi.
         </p>
       </div>
 

@@ -1,11 +1,12 @@
 // SystemStatusBar.tsx
 // baris status di atas menu island
-// kiri: kecepatan, kanan: wifi + bluetooth + baterai
+// kiri: kecepatan unduh (angka + satuan), tengah: hari + tanggal + jam, kanan: wifi + bluetooth + baterai
+// tengah tepat di tengah saat diam; saat nama wifi / bluetooth melebar,
+// kolom kanan membesar dan jam ikut bergeser ke kiri
 // ikon muncul dulu, lalu nama geser keluar, lalu menciut (keluar lagi saat hover)
 
 import React, { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowDown, ArrowUp } from "lucide-react";
 import wifiIcon from "../../../assets/styles/menu_icons/wifi.svg";
 import bluetoothIcon from "../../../assets/styles/menu_icons/bluetooth.svg";
 import type { BatteryInfo, NetSpeed, RadiosStatus } from "./useSystemStatus";
@@ -17,26 +18,122 @@ const RED = "#F87171";
 const BODY_W = 23;
 
 // byte per detik -> teks pendek
-function fmtSpeed(bps: number): string {
-  if (bps < 1024) return `${Math.round(bps)} B/s`;
+// dipecah jadi [angka, satuan], mis. ["128", "KB/s"]
+function fmtSpeedParts(bps: number): [string, string] {
+  if (bps < 1024) return [String(Math.round(bps)), "B/s"];
   const kb = bps / 1024;
-  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB/s`;
+  if (kb < 1024)
+    return [kb < 10 ? kb.toFixed(1) : String(Math.round(kb)), "KB/s"];
   const mb = kb / 1024;
-  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB/s`;
+  return [mb < 10 ? mb.toFixed(1) : String(Math.round(mb)), "MB/s"];
 }
 
-const Speed: React.FC<{ net: NetSpeed }> = ({ net }) => (
-  <div className="flex w-[64px] shrink-0 flex-col justify-center text-[9.5px] font-medium leading-[11px] tabular-nums text-white/70">
-    <span className="flex items-center gap-[2px]">
-      <ArrowDown size={9} strokeWidth={3} className="shrink-0 text-emerald-500" />
-      <span className="truncate">{fmtSpeed(net.down)}</span>
-    </span>
-    <span className="flex items-center gap-[2px]">
-      <ArrowUp size={9} strokeWidth={3} className="shrink-0 text-red-500" />
-      <span className="truncate">{fmtSpeed(net.up)}</span>
-    </span>
-  </div>
-);
+const fmtSpeed = (bps: number): string => fmtSpeedParts(bps).join(" ");
+
+// kecepatan unduh di kiri: angka + satuan, putih
+const Speed: React.FC<{ net: NetSpeed }> = ({ net }) => {
+  const [value, unit] = fmtSpeedParts(net.down);
+
+  return (
+    <div
+      title={`Unduh ${fmtSpeed(net.down)}`}
+      className="flex shrink-0 items-baseline gap-[3px] whitespace-nowrap leading-none tabular-nums"
+    >
+      <span className="text-[11px] font-semibold text-white">{value}</span>
+      <span className="text-[9px] font-medium text-white/55">{unit}</span>
+    </div>
+  );
+};
+
+// hari, tanggal, dan jam
+
+const DAYS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+const DAYS_FULL = [
+  "Minggu",
+  "Senin",
+  "Selasa",
+  "Rabu",
+  "Kamis",
+  "Jumat",
+  "Sabtu",
+];
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "Mei",
+  "Jun",
+  "Jul",
+  "Agu",
+  "Sep",
+  "Okt",
+  "Nov",
+  "Des",
+];
+const MONTHS_FULL = [
+  "Januari",
+  "Februari",
+  "Maret",
+  "April",
+  "Mei",
+  "Juni",
+  "Juli",
+  "Agustus",
+  "September",
+  "Oktober",
+  "November",
+  "Desember",
+];
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+// waktu sekarang, diperbarui tepat saat menit berganti
+function useMinute(): Date {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    let timer: number;
+    const untilNextMinute = () => 60000 - (Date.now() % 60000) + 20;
+    const tick = () => {
+      setNow(new Date());
+      timer = window.setTimeout(tick, untilNextMinute());
+    };
+
+    timer = window.setTimeout(tick, untilNextMinute());
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return now;
+}
+
+// contoh: Kam 30 Nov | 16:20
+const Clock: React.FC = () => {
+  const now = useMinute();
+  const day = DAYS[now.getDay()];
+  const date = now.getDate();
+  const month = MONTHS[now.getMonth()];
+  const full = `${DAYS_FULL[now.getDay()]}, ${date} ${MONTHS_FULL[now.getMonth()]} ${now.getFullYear()}`;
+
+  return (
+    <div
+      title={full}
+      className="flex shrink-0 select-none items-baseline gap-[7px] whitespace-nowrap leading-none"
+    >
+      <span className="text-[10.5px] font-medium tracking-wide text-white/45">
+        {day}
+      </span>
+      <span className="text-[11px] font-medium tabular-nums text-white/75">
+        {date} {month}
+      </span>
+      <span className="text-[13px] font-semibold tabular-nums tracking-tight text-white">
+        {pad2(now.getHours())}
+        <span className="relative -top-px px-[0.5px] text-white/50">:</span>
+        {pad2(now.getMinutes())}
+      </span>
+    </div>
+  );
+};
 
 // jeda ikon muncul sebelum nama keluar
 const INTRO_DELAY_MS = 450;
@@ -209,14 +306,19 @@ export const SystemStatusBar: React.FC<{
         ? bt[0]
         : `${bt[0]} +${bt.length - 1}`;
 
+  // Tiga kolom: kiri dan kanan sama lebar (jam tepat di tengah).
+  // Saat isi kolom kanan melebar (nama wifi / bluetooth), kolom itu
+  // membesar dan jam ikut bergeser ke kiri.
   return (
-    <div className="flex h-[24px] shrink-0 items-center gap-2">
-      <Speed net={net} />
+    <div className="grid h-[24px] shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2">
+      <div className="flex items-center justify-start">
+        <Speed net={net} />
+      </div>
 
-      <div className="flex-1" />
+      <Clock />
 
       {/* wifi + bluetooth + baterai */}
-      <div className="flex min-w-0 shrink-0 items-center gap-2">
+      <div className="flex items-center justify-end gap-2">
         <AnimatePresence>
           {radios.wifiOn && (
             <Chip

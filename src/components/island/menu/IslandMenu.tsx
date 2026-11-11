@@ -24,6 +24,9 @@ import catatanIcon from "../../../assets/styles/icons/catatan.svg";
 import wifiIcon from "../../../assets/styles/menu_icons/wifi.svg";
 import bluetoothIcon from "../../../assets/styles/menu_icons/bluetooth.svg";
 import airplaneIcon from "../../../assets/styles/menu_icons/airplane.svg";
+import powerSaverIcon from "../../../assets/styles/menu_icons/power_saver.svg";
+import powerBalancedIcon from "../../../assets/styles/menu_icons/power_balanced.svg";
+import powerPerformanceIcon from "../../../assets/styles/menu_icons/power_performance.svg";
 import chooseSound from "../../../assets/sounds/choose.wav";
 import dropSound from "../../../assets/sounds/drop.wav";
 import { getPrayerState } from "./prayer";
@@ -32,7 +35,7 @@ import { CalendarView } from "./CalendarUi";
 import { GeoLocation, Place, searchPlaces, useLocation } from "./useLocation";
 import { usePrayerSchedule } from "./usePrayerSchedule";
 import { stopwatch, useStopwatchRunning } from "./stopwatchStore";
-import { SystemInfo, useSystemStatus } from "./useSystemStatus";
+import { PowerMode, SystemInfo, useSystemStatus } from "./useSystemStatus";
 import { SystemStatusBar } from "./SystemStatusBar";
 import { BluetoothView, WifiView } from "./NetworkViews";
 
@@ -100,11 +103,20 @@ const Header: React.FC<{
 
 // Tombol menu.
 
+type TileTone = "sky" | "amber" | "green";
+
+// Warna tile saat aktif (+ saat di-hover).
+const TILE_LIT: Record<TileTone, string> = {
+  sky: "bg-sky-400/30 hover:bg-sky-400/40",
+  amber: "bg-amber-400/30 hover:bg-amber-400/40",
+  green: "bg-emerald-400/30 hover:bg-emerald-400/40",
+};
+
 interface TileProps {
   name: string;
   icon: string;
   active?: boolean;
-  tone?: "sky" | "amber";
+  tone?: TileTone;
   dot?: boolean;
   onClick: () => void;
   /** Klik kanan untuk mengubah status. */
@@ -120,10 +132,7 @@ const MenuTile: React.FC<TileProps> = ({
   onClick,
   onContext,
 }) => {
-  const lit =
-    tone === "amber"
-      ? "bg-amber-400/30 hover:bg-amber-400/40"
-      : "bg-sky-400/30 hover:bg-sky-400/40";
+  const lit = TILE_LIT[tone];
 
   return (
     <motion.button
@@ -169,6 +178,22 @@ const MenuTile: React.FC<TileProps> = ({
   );
 };
 
+// Mode daya Windows: urutan saat tile diklik (klik kanan = mundur).
+const POWER_ORDER: PowerMode[] = ["saver", "balanced", "performance"];
+
+const POWER_META: Record<
+  PowerMode,
+  { label: string; icon: string; tone: TileTone }
+> = {
+  saver: { label: "Hemat daya", icon: powerSaverIcon, tone: "green" },
+  balanced: { label: "Seimbang", icon: powerBalancedIcon, tone: "sky" },
+  performance: {
+    label: "Performa tinggi",
+    icon: powerPerformanceIcon,
+    tone: "amber",
+  },
+};
+
 // Halaman utama menu.
 
 const HomeView: React.FC<{
@@ -176,7 +201,17 @@ const HomeView: React.FC<{
   sys: SystemInfo;
   onOpen: (view: MenuView) => void;
 }> = ({ swRunning, sys, onOpen }) => {
-  const { status, radios } = sys;
+  const { status, radios, power } = sys;
+
+  // Pindah power mode: maju (klik) atau mundur (klik kanan).
+  const stepPower = (dir: 1 | -1) => {
+    if (!power.supported) return;
+    const i = POWER_ORDER.indexOf(power.mode);
+    const next =
+      POWER_ORDER[(i + dir + POWER_ORDER.length) % POWER_ORDER.length];
+    void sys.setPowerMode(next);
+  };
+  const powerMeta = POWER_META[power.mode];
 
   // Daftar aplikasi.
   const apps: { id: MenuView; name: string; icon: string }[] = [
@@ -227,6 +262,18 @@ const HomeView: React.FC<{
           active={radios.airplane}
           tone="amber"
           onClick={() => void sys.setAirplane(!radios.airplane)}
+        />
+        <MenuTile
+          name={
+            power.supported
+              ? `Mode daya: ${powerMeta.label} (klik: ganti, klik kanan: kembali)`
+              : "Mode daya (tidak didukung di Windows ini)"
+          }
+          icon={powerMeta.icon}
+          active={power.supported && power.mode !== "balanced"}
+          tone={powerMeta.tone}
+          onClick={() => stepPower(1)}
+          onContext={() => stepPower(-1)}
         />
       </div>
     </div>
