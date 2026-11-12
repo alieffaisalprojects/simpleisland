@@ -1,9 +1,9 @@
 // SystemStatusBar.tsx
 // baris status di atas menu island
-// kiri: kecepatan unduh (angka + satuan), tengah: hari + tanggal + jam, kanan: wifi + bluetooth + baterai
-// tengah tepat di tengah saat diam; saat nama wifi / bluetooth melebar,
-// kolom kanan membesar dan jam ikut bergeser ke kiri
-// ikon muncul dulu, lalu nama geser keluar, lalu menciut (keluar lagi saat hover)
+// kiri: jam, tengah: hari + tanggal, kanan: bluetooth + wifi + baterai (wifi menempel di kiri baterai)
+// hari + tanggal tepat di tengah saat diam; saat nama wifi / bluetooth melebar,
+// kolom kanan membesar dan hari + tanggal ikut bergeser ke kiri
+// ikon muncul dulu, lalu nama geser keluar ke kiri ikon, lalu menciut (keluar lagi saat hover)
 
 import React, { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -16,34 +16,6 @@ const RED = "#F87171";
 
 // lebar badan ikon baterai
 const BODY_W = 23;
-
-// byte per detik -> teks pendek
-// dipecah jadi [angka, satuan], mis. ["128", "KB/s"]
-function fmtSpeedParts(bps: number): [string, string] {
-  if (bps < 1024) return [String(Math.round(bps)), "B/s"];
-  const kb = bps / 1024;
-  if (kb < 1024)
-    return [kb < 10 ? kb.toFixed(1) : String(Math.round(kb)), "KB/s"];
-  const mb = kb / 1024;
-  return [mb < 10 ? mb.toFixed(1) : String(Math.round(mb)), "MB/s"];
-}
-
-const fmtSpeed = (bps: number): string => fmtSpeedParts(bps).join(" ");
-
-// kecepatan unduh di kiri: angka + satuan, putih
-const Speed: React.FC<{ net: NetSpeed }> = ({ net }) => {
-  const [value, unit] = fmtSpeedParts(net.down);
-
-  return (
-    <div
-      title={`Unduh ${fmtSpeed(net.down)}`}
-      className="flex shrink-0 items-baseline gap-[3px] whitespace-nowrap leading-none tabular-nums"
-    >
-      <span className="text-[11px] font-semibold text-white">{value}</span>
-      <span className="text-[9px] font-medium text-white/55">{unit}</span>
-    </div>
-  );
-};
 
 // hari, tanggal, dan jam
 
@@ -107,30 +79,40 @@ function useMinute(): Date {
   return now;
 }
 
-// contoh: Kam 30 Nov | 16:20
-const Clock: React.FC = () => {
+const fullDate = (now: Date) =>
+  `${DAYS_FULL[now.getDay()]}, ${now.getDate()} ${MONTHS_FULL[now.getMonth()]} ${now.getFullYear()}`;
+
+// tengah, contoh: Kam 30 Nov
+const DateText: React.FC = () => {
   const now = useMinute();
-  const day = DAYS[now.getDay()];
-  const date = now.getDate();
-  const month = MONTHS[now.getMonth()];
-  const full = `${DAYS_FULL[now.getDay()]}, ${date} ${MONTHS_FULL[now.getMonth()]} ${now.getFullYear()}`;
 
   return (
     <div
-      title={full}
-      className="flex shrink-0 select-none items-baseline gap-[7px] whitespace-nowrap leading-none"
+      title={fullDate(now)}
+      className="flex shrink-0 select-none items-baseline gap-[6px] whitespace-nowrap leading-none"
     >
       <span className="text-[10.5px] font-medium tracking-wide text-white/45">
-        {day}
+        {DAYS[now.getDay()]}
       </span>
       <span className="text-[11px] font-medium tabular-nums text-white/75">
-        {date} {month}
+        {now.getDate()} {MONTHS[now.getMonth()]}
       </span>
-      <span className="text-[13px] font-semibold tabular-nums tracking-tight text-white">
-        {pad2(now.getHours())}
-        <span className="relative -top-px px-[0.5px] text-white/50">:</span>
-        {pad2(now.getMinutes())}
-      </span>
+    </div>
+  );
+};
+
+// kiri, contoh: 16:20
+const TimeText: React.FC = () => {
+  const now = useMinute();
+
+  return (
+    <div
+      title={fullDate(now)}
+      className="shrink-0 select-none whitespace-nowrap text-[13px] font-semibold leading-none tabular-nums tracking-tight text-white"
+    >
+      {pad2(now.getHours())}
+      <span className="relative -top-px px-[0.5px] text-white/50">:</span>
+      {pad2(now.getMinutes())}
     </div>
   );
 };
@@ -142,11 +124,21 @@ const INTRO_MS = 2000;
 
 // chip ikon: ikon muncul dulu, lalu nama geser keluar, lalu menciut
 // nama keluar lagi saat hover
-const Chip: React.FC<{
+//
+// - nama ada di KIRI ikon, jadi ikon tidak bergeser saat nama keluar / menciut
+//   (ikon tetap di bawah kursor, hover tidak berkedip)
+// - dibungkus React.memo dan tanpa layout="position": status sistem di-poll
+//   tiap detik, tanpa memo semua chip ikut render ulang dan framer
+//   menganimasikan selisih posisinya terus-menerus (ikon bergeser kiri-kanan)
+const Chip = React.memo(function Chip({
+  icon,
+  label,
+  dim,
+}: {
   icon: string;
   label: string;
   dim?: boolean;
-}> = ({ icon, label, dim }) => {
+}) {
   const [hover, setHover] = useState(false);
   const [intro, setIntro] = useState(false);
   const hasLabel = label !== "";
@@ -171,7 +163,6 @@ const Chip: React.FC<{
 
   return (
     <motion.span
-      layout="position"
       initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: dim ? 0.55 : 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.8 }}
@@ -181,28 +172,28 @@ const Chip: React.FC<{
       title={label || undefined}
       className="flex min-w-0 items-center px-0.5 py-[3px] text-[10.5px] font-medium leading-none text-white/90"
     >
+      {/* nama (di kiri ikon) */}
+      {label && (
+        <motion.span
+          initial={false}
+          animate={{ width: open ? "auto" : 0, opacity: open ? 1 : 0 }}
+          transition={{ duration: 0.26, ease: [0.32, 0.72, 0, 1] }}
+          className="overflow-hidden"
+        >
+          <span className="block max-w-[78px] truncate whitespace-nowrap pr-1">
+            {label}
+          </span>
+        </motion.span>
+      )}
       <img
         src={icon}
         alt=""
         draggable={false}
         className="h-[13px] w-[13px] shrink-0 select-none invert"
       />
-      {/* nama */}
-      {label && (
-        <motion.span
-          initial={false}
-          animate={{ width: open ? "auto" : 0, opacity: open ? 1 : 0 }}
-          transition={{ duration: 0.22, ease: "easeOut" }}
-          className="overflow-hidden"
-        >
-          <span className="block max-w-[78px] truncate whitespace-nowrap pl-1">
-            {label}
-          </span>
-        </motion.span>
-      )}
     </motion.span>
   );
-};
+});
 
 const Battery: React.FC<{ battery: BatteryInfo }> = ({ battery }) => {
   const { percent, charging, plugged } = battery;
@@ -275,17 +266,21 @@ const Battery: React.FC<{ battery: BatteryInfo }> = ({ battery }) => {
           )}
         </g>
 
-        {/* petir */}
-        {charging && (
+        {/* petir ala iPhone: putih dengan kontur gelap, terlihat di atas isi
+            maupun bagian kosong. Muncul saat mengisi atau terhubung ke charger
+            (mis. baterai sudah penuh tapi charger masih tertancap) */}
+        {green && (
           <motion.path
-            d="M12.9 2.4 L8.5 7.3 H11.4 L10.5 10.6 L14.9 5.7 H12 Z"
-            fill="#052e16"
-            stroke="#052e16"
-            strokeWidth="0.4"
+            d="M13.4 1.6 L7.6 7.2 H11 L10 11.4 L15.8 5.6 H12.3 Z"
+            fill="#ffffff"
+            stroke="#0b0b0c"
+            strokeWidth="1.2"
             strokeLinejoin="round"
-            animate={{ scale: [1, 1.12, 1] }}
+            paintOrder="stroke"
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: "spring", stiffness: 500, damping: 24 }}
             style={{ transformOrigin: "11.7px 6.5px" }}
-            transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
           />
         )}
       </svg>
@@ -295,9 +290,10 @@ const Battery: React.FC<{ battery: BatteryInfo }> = ({ battery }) => {
 
 export const SystemStatusBar: React.FC<{
   battery: BatteryInfo;
-  net: NetSpeed;
+  /** tidak dipakai lagi (kecepatan unduh dihapus); dibiarkan agar pemanggil lama tidak error */
+  net?: NetSpeed;
   radios: RadiosStatus;
-}> = ({ battery, net, radios }) => {
+}> = ({ battery, radios }) => {
   const bt = radios.bluetoothConnected;
   const btLabel =
     bt.length === 0
@@ -306,34 +302,36 @@ export const SystemStatusBar: React.FC<{
         ? bt[0]
         : `${bt[0]} +${bt.length - 1}`;
 
-  // Tiga kolom: kiri dan kanan sama lebar (jam tepat di tengah).
+  // Tiga kolom: kiri dan kanan sama lebar (hari + tanggal tepat di tengah).
   // Saat isi kolom kanan melebar (nama wifi / bluetooth), kolom itu
-  // membesar dan jam ikut bergeser ke kiri.
+  // membesar dan hari + tanggal ikut bergeser ke kiri.
   return (
     <div className="grid h-[24px] shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2">
+      {/* jam (ujung kiri) */}
       <div className="flex items-center justify-start">
-        <Speed net={net} />
+        <TimeText />
       </div>
 
-      <Clock />
+      {/* hari + tanggal (tengah) */}
+      <DateText />
 
-      {/* wifi + bluetooth + baterai */}
+      {/* bluetooth + wifi + baterai (wifi menempel di kiri baterai) */}
       <div className="flex items-center justify-end gap-2">
         <AnimatePresence>
-          {radios.wifiOn && (
-            <Chip
-              key="wifi"
-              icon={wifiIcon}
-              label={radios.ssid ?? ""}
-              dim={!radios.ssid}
-            />
-          )}
           {radios.bluetoothOn && (
             <Chip
               key="bt"
               icon={bluetoothIcon}
               label={btLabel}
               dim={bt.length === 0}
+            />
+          )}
+          {radios.wifiOn && (
+            <Chip
+              key="wifi"
+              icon={wifiIcon}
+              label={radios.ssid ?? ""}
+              dim={!radios.ssid}
             />
           )}
         </AnimatePresence>

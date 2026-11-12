@@ -1,5 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, type MotionStyle } from "framer-motion";
+import {
+  AnimatePresence,
+  animate,
+  motion,
+  useMotionValue,
+  useTransform,
+  type MotionStyle,
+} from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronLeft, File, Music } from "lucide-react";
@@ -57,6 +64,23 @@ import { useIslandVolume } from "./dynamic_island/useIslandVolume";
 import { IslandMenu } from "./menu/IslandMenu";
 import { VOLUME_HUD_H, VOLUME_HUD_W, VolumeHud } from "./menu/VolumeHud";
 import { useStopwatchRunning } from "./menu/stopwatchStore";
+
+//hover saat idle: pill nyembul, pointer tertelan
+const BULGE_X = 1.16;
+const BULGE_Y = 1.25;
+const BULGE_MS = 240;
+const SWALLOW_POP = {
+  type: "spring",
+  stiffness: 620,
+  damping: 15,
+  mass: 0.7,
+} as const;
+
+//swipe kiri / kanan: next / prev
+const SWIPE_START = 8; // jarak awal dianggap drag (px)
+const SWIPE_DIST = 56; // jarak minimal untuk next / prev (px)
+const SWIPE_MAX = 26; // island ikut bergeser maksimal (px)
+const SWIPE_BACK = { type: "spring", stiffness: 520, damping: 22 } as const;
 
 interface DynamicIslandProps {
   activeWidget: ActiveWidget;
@@ -116,6 +140,25 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const tabRef = useRef<HTMLButtonElement>(null);
   const [menuHover, setMenuHover] = useState(false); // mouse di island / tab
   const [tabTail, setTabTail] = useState(false); // gooey tetap nyala saat tab keluar
+
+  //pointer tertelan
+  const [overIsland, setOverIsland] = useState(false);
+  const [cursorBack, setCursorBack] = useState(false); // klik: pointer muncul lagi
+  const [bulge, setBulge] = useState(false);
+  const bulgeTimer = useRef(0);
+
+  //swipe next / prev
+  const swipeX = useMotionValue(0);
+  // dipakai bersama oleh background pil, konten, dan tab kembali,
+  // supaya semuanya bergeser serempak (termasuk saat mini)
+  const islandX = useTransform(swipeX, (v) => `calc(-50% + ${v}px)`);
+  const swipe = useRef<{
+    id: number;
+    x: number;
+    y: number;
+    active: boolean;
+  } | null>(null);
+  const swipeDidDrag = useRef(false); // setelah drag, klik tidak diproses
 
   const hoverIn = () => setMenuHover(true);
 
@@ -178,6 +221,35 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     forceMini ||
     kind === "idle" ||
     (kind === "music" && pausedIdle && !lyricsMode);
+
+  //pointer tertelan hanya saat idle (tidak ada aktivitas, island tertutup)
+  const swallowOn = isMini && !forceMini && !expanded && !menuOpen;
+  const swallowed = swallowOn && overIsland && !cursorBack;
+
+  const popBulge = () => {
+    window.clearTimeout(bulgeTimer.current);
+    setBulge(true);
+    bulgeTimer.current = window.setTimeout(() => setBulge(false), BULGE_MS);
+  };
+
+  const leaveIsland = () => {
+    window.clearTimeout(bulgeTimer.current);
+    setBulge(false);
+    setOverIsland(false);
+    setCursorBack(false);
+  };
+
+  // idle lagi saat pointer sudah di dalam: nyembul sekali, lainnya batal
+  useEffect(() => {
+    if (swallowOn && overIsland && !cursorBack) {
+      popBulge();
+      return;
+    }
+    window.clearTimeout(bulgeTimer.current);
+    setBulge(false);
+  }, [swallowOn]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => window.clearTimeout(bulgeTimer.current), []);
 
   // ukuran dari Pengaturan (selisih dari ukuran bawaan, sesuai gaya aktif)
   // compact dan mini punya pengaturan sendiri; expanded tidak ikut diubah
@@ -261,9 +333,16 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     borderBottomRightRadius: bottomRadius,
     // paste tidak mengecil
     scale: getPressScale(pressed && kind !== "paste", expanded),
+    // nyembul saat hover idle
+    scaleX: bulge ? BULGE_X : 1,
+    scaleY: bulge ? BULGE_Y : 1,
   };
 
-  const spring = expanded ? SPRING_EXPAND : SPRING_COLLAPSE;
+  const spring = bulge
+    ? SWALLOW_POP
+    : expanded
+      ? SPRING_EXPAND
+      : SPRING_COLLAPSE;
 
   // kunci hanya saat lirik expanded
   // terkunci juga selama stopwatch berjalan: klik luar dan blur tidak menutup menu
@@ -287,6 +366,69 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     if (!secondary) return;
     setPick(secondary);
     onSelectWidget(secondary === "timer" ? "timer" : "spotify");
+  };
+
+  // ---- swipe next / prev (musik, compact, mini, dan expanded) ----
+
+  const swipeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    swipeDidDrag.current = false;
+    if (e.button !== 0 || kind !== "music" || forceMini) return;
+    if (lockedRef.current) return;
+    // slider, tombol, dan input tetap bekerja sendiri
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, [role="slider"], [data-no-swipe]'))
+      return;
+    swipe.current = {
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      active: false,
+    };
+  };
+
+  const swipeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = swipe.current;
+    if (!s || s.id !== e.pointerId || !(e.buttons & 1)) return;
+    const dx = e.clientX - s.x;
+    const dy = e.clientY - s.y;
+
+    if (!s.active) {
+      if (Math.abs(dx) < SWIPE_START) return;
+      // geser vertikal: bukan swipe
+      if (Math.abs(dy) > Math.abs(dx)) {
+        swipe.current = null;
+        return;
+      }
+      s.active = true;
+      swipeDidDrag.current = true;
+      setPressed(false);
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+
+    swipeX.set(Math.max(-SWIPE_MAX, Math.min(SWIPE_MAX, dx * 0.4)));
+  };
+
+  const swipeEnd = (e: React.PointerEvent<HTMLDivElement>, cancel: boolean) => {
+    const s = swipe.current;
+    if (!s || s.id !== e.pointerId) return;
+    swipe.current = null;
+    if (!s.active) return;
+
+    animate(swipeX, 0, SWIPE_BACK);
+    const dx = e.clientX - s.x;
+    if (cancel || Math.abs(dx) < SWIPE_DIST) return;
+
+    // kiri = next, kanan = prev
+    if (dx < 0) {
+      onNextTrack();
+      invoke("media_next").catch((err) =>
+        console.error("media_next gagal:", err),
+      );
+    } else {
+      invoke("media_previous").catch((err) =>
+        console.error("media_previous gagal:", err),
+      );
+    }
   };
 
   // ---- menu klik kanan ----
@@ -362,7 +504,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // mouse keluar dari jendela -> sembunyikan tab
   useEffect(() => {
     const onOut = (event: MouseEvent) => {
-      if (!event.relatedTarget) setMenuHover(false);
+      if (!event.relatedTarget) {
+        setMenuHover(false);
+        setOverIsland(false);
+      }
     };
     document.addEventListener("mouseout", onOut);
     return () => document.removeEventListener("mouseout", onOut);
@@ -615,10 +760,11 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // (tab hanya tampil pada gaya notch / tab, jadi island selalu menempel di atas)
   const tabTop = Math.max(TAB_TOP, shoulder + 6);
 
+  // x ikut islandX supaya tab ikut bergeser saat swipe
   const tabFrameStyle: MotionStyle = {
     top: islandTop,
     height: 0,
-    x: "-50%",
+    x: islandX,
     transformOrigin: "top center",
   };
 
@@ -903,12 +1049,14 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         className="absolute inset-0"
         style={{ filter: gooOn ? "url(#gooey-effect)" : undefined }}
       >
-        {/* pil utama */}
+        {/* pil utama (background hitam) */}
+        {/* x memakai islandX (bukan "-50%" tetap) supaya background ikut
+            bergeser bersama konten saat swipe, termasuk di mode mini */}
         <motion.div
           className="absolute left-1/2 bg-[#050506]"
           style={{
             top: islandTop,
-            x: "-50%",
+            x: islandX,
             transformOrigin: "top center",
           }}
           initial={false}
@@ -973,6 +1121,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         animate={anim}
         transition={spring}
         onClick={() => {
+          if (swipeDidDrag.current) {
+            swipeDidDrag.current = false;
+            return;
+          }
           if (kind === "paste" || kind === "menu") return;
           if (lockedRef.current) return; // terkunci
           // tidak ada aktivitas lain: klik kiri langsung membuka menu
@@ -983,19 +1135,39 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           setExpanded((v) => !v);
         }}
         onContextMenu={handleContextMenu}
-        onPointerDown={() => setPressed(true)}
-        onPointerUp={() => setPressed(false)}
-        onPointerEnter={hoverIn}
-        onPointerMove={hoverIn}
+        onPointerDown={(e) => {
+          setPressed(true);
+          setCursorBack(true); // klik kiri / kanan: pointer muncul lagi
+          swipeStart(e);
+        }}
+        onPointerUp={(e) => {
+          setPressed(false);
+          swipeEnd(e, false);
+        }}
+        onPointerEnter={() => {
+          hoverIn();
+          setOverIsland(true);
+          if (swallowOn) popBulge();
+        }}
+        onPointerMove={(e) => {
+          hoverIn();
+          swipeMove(e);
+        }}
         onPointerLeave={(e) => {
           setPressed(false);
+          leaveIsland();
           hoverOut(e);
         }}
-        onPointerCancel={() => setPressed(false)}
-        className="pointer-events-auto absolute left-1/2 z-50 cursor-pointer overflow-hidden text-white"
+        onPointerCancel={(e) => {
+          setPressed(false);
+          swipeEnd(e, true);
+        }}
+        className={`pointer-events-auto absolute left-1/2 z-50 overflow-hidden text-white ${
+          swallowed ? "cursor-none [&_*]:cursor-none" : "cursor-pointer"
+        }`}
         style={{
           top: islandTop,
-          x: "-50%",
+          x: islandX,
           transformOrigin: "top center",
         }}
       >

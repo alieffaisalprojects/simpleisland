@@ -60,6 +60,19 @@ const EMPTY_RADIOS: RadiosStatus = {
   airplane: false,
 };
 
+// ssid yang sesaat kosong (saat scan) ditahan selama ini
+const SSID_HOLD_MS = 12000;
+
+// isi sama persis -> tidak perlu update state (hindari render ulang)
+const sameRadios = (a: RadiosStatus, b: RadiosStatus): boolean =>
+  a.wifiPresent === b.wifiPresent &&
+  a.wifiOn === b.wifiOn &&
+  a.ssid === b.ssid &&
+  a.bluetoothPresent === b.bluetoothPresent &&
+  a.bluetoothOn === b.bluetoothOn &&
+  a.airplane === b.airplane &&
+  a.bluetoothConnected.join("\n") === b.bluetoothConnected.join("\n");
+
 export function useSystemStatus() {
   const [status, setStatus] = useState<SystemStatus>(EMPTY_STATUS);
   const [radios, setRadios] = useState<RadiosStatus>(EMPTY_RADIOS);
@@ -71,14 +84,33 @@ export function useSystemStatus() {
   const volBusy = useRef(false);
   const volPending = useRef<number | null>(null);
   const volTouched = useRef(0);
+  // ssid terakhir yang terbaca (supaya tidak berkedip kosong saat scan)
+  const lastSsid = useRef<{ ssid: string; at: number } | null>(null);
 
   const refreshRadios = useCallback(async () => {
     if (loading.current) return;
     loading.current = true;
     const v = version.current;
     try {
-      const r = await invoke<RadiosStatus>("system_radios");
-      if (alive.current && v === version.current) setRadios(r);
+      let r = await invoke<RadiosStatus>("system_radios");
+
+      // ssid sesaat null saat scan: pakai nilai terakhir selama beberapa detik
+      if (
+        r.wifiOn &&
+        !r.ssid &&
+        lastSsid.current &&
+        Date.now() - lastSsid.current.at < SSID_HOLD_MS
+      ) {
+        r = { ...r, ssid: lastSsid.current.ssid };
+      } else if (r.ssid) {
+        lastSsid.current = { ssid: r.ssid, at: Date.now() };
+      } else if (!r.wifiOn) {
+        lastSsid.current = null;
+      }
+
+      // objek baru hanya bila isinya benar-benar berubah
+      if (alive.current && v === version.current)
+        setRadios((prev) => (sameRadios(prev, r) ? prev : r));
     } catch (e) {
       console.error("system_radios gagal:", e);
     } finally {
@@ -140,6 +172,8 @@ export function useSystemStatus() {
       optimistic: Partial<RadiosStatus>,
     ) => {
       version.current += 1;
+      // ssid ditahan hanya untuk kondisi normal; saat radio diubah, mulai bersih
+      lastSsid.current = null;
       setRadios((prev) => ({ ...prev, ...optimistic }));
       try {
         await invoke(cmd, args);
