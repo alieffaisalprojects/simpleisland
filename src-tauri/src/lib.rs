@@ -313,26 +313,26 @@ mod spotify_visibility {
 
             let mut found = false;
 
-if Process32FirstW(snapshot, &mut entry).is_ok() {
-    loop {
-        if entry.th32ProcessID == pid {
-            let length = entry
-                .szExeFile
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(entry.szExeFile.len());
+            if Process32FirstW(snapshot, &mut entry).is_ok() {
+                loop {
+                    if entry.th32ProcessID == pid {
+                        let length = entry
+                            .szExeFile
+                            .iter()
+                            .position(|&c| c == 0)
+                            .unwrap_or(entry.szExeFile.len());
 
-            let name = String::from_utf16_lossy(&entry.szExeFile[..length]);
+                        let name = String::from_utf16_lossy(&entry.szExeFile[..length]);
 
-            found = name.eq_ignore_ascii_case("Spotify.exe");
-            break;
-        }
+                        found = name.eq_ignore_ascii_case("Spotify.exe");
+                        break;
+                    }
 
-        if Process32NextW(snapshot, &mut entry).is_err() {
-            break;
-        }
-    }
-}
+                    if Process32NextW(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
 
             let _ = CloseHandle(snapshot);
             found
@@ -1656,8 +1656,9 @@ pub fn run() {
             system_status::system_open_page
         ])
         .setup(|app| {
+            // 1. Atur window island lebih dulu (taskbar sudah disembunyikan lewat
+            //    "skipTaskbar": true di tauri.conf.json, baris ini hanya pengaman).
             if let Some(window) = app.get_webview_window("main") {
-                // Atur window island.
                 let _ = window.set_skip_taskbar(true);
                 let _ = window.set_always_on_top(true);
 
@@ -1666,17 +1667,18 @@ pub fn run() {
                 }
             }
 
-            // Muat pengaturan. Island hanya tampil bila diaktifkan di Pengaturan;
-            // pada pemasangan baru island mati dan jendela Pengaturan dibuka.
+            // 2. Muat pengaturan lalu langsung buat tray, sebelum pekerjaan berat apa pun.
+            //    Island hanya tampil bila diaktifkan di Pengaturan; pada pemasangan baru
+            //    island mati dan jendela Pengaturan dibuka.
             let first_run = settings::init(app.handle());
 
-            // Siapkan system tray.
             setup_tray(app.handle())?;
 
             if first_run {
                 settings::open_settings(app.handle());
             }
 
+            // 3. Pemantau yang langsung memengaruhi island: ringan (hanya membuat thread).
             #[cfg(windows)]
             {
                 // Pantau aplikasi Spotify yang sedang aktif.
@@ -1695,14 +1697,20 @@ pub fn run() {
                 }
             }
 
-            // Pantau timer Windows Clock.
-            island_native::start_clock_watcher(app.handle().clone());
+            // 4. Pemantau yang tidak mendesak dijalankan di thread terpisah supaya
+            //    setup cepat selesai dan WebView island bisa langsung dimuat.
+            let deferred = app.handle().clone();
 
-            // Tangkap audio sistem untuk spektrum (aktif hanya saat diminta frontend).
-            spectrum::start(app.handle().clone());
+            std::thread::spawn(move || {
+                // Pantau timer Windows Clock.
+                island_native::start_clock_watcher(deferred.clone());
 
-            // Pantau drag file dari Explorer / Desktop untuk menu radial.
-            radial_overlay::start(app.handle().clone());
+                // Tangkap audio sistem untuk spektrum (aktif hanya saat diminta frontend).
+                spectrum::start(deferred.clone());
+
+                // Pantau drag file dari Explorer / Desktop untuk menu radial.
+                radial_overlay::start(deferred);
+            });
 
             #[cfg(windows)]
             {
@@ -1718,4 +1726,4 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-    }
+}

@@ -1,8 +1,8 @@
 [package]
-name = "tauri-app"
-version = "0.1.0"
+name = "simpleisland"
+version = "1.0.0"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["Faisal Adriansyah"]
 edition = "2024"
 
 [lib]

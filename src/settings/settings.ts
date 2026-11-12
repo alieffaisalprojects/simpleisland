@@ -136,12 +136,12 @@ export const STYLE_OPTIONS: { id: IslandStyle; label: string; desc: string }[] =
     {
       id: "pill",
       label: "Dynamic Island",
-      desc: "Melayang di atas layar, berbentuk pil seperti Dynamic Island iPhone.",
+      desc: "Melayang di atas layar, berbentuk pil.",
     },
     {
       id: "notch",
       label: "Notch",
-      desc: "Menempel di tepi atas dengan bahu kiri-kanan, seperti notch MacBook.",
+      desc: "Menempel di tepi atas dengan bahu kiri-kanan",
     },
     {
       id: "tab",

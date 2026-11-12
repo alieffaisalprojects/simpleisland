@@ -45,7 +45,7 @@ type Tab = "general" | "appearance" | "install";
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "general", label: "Umum", icon: iconUmum },
   { id: "appearance", label: "Tampilan", icon: iconTampilan },
-  { id: "install", label: "Instalasi", icon: iconInstal },
+  { id: "install", label: "Petunjuk Instalasi", icon: iconInstal },
 ];
 
 // komponen kecil
@@ -455,7 +455,7 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
 
         <Row
           icon={iconMenu}
-          title="Gaya Menu File"
+          title="Gaya Menu Serbaguna"
           desc="Kotak: menu muncul di island. Radial: menu muncul di sekitar file yang diseret dari Explorer atau Desktop."
         >
           <Segmented
@@ -528,8 +528,6 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
   const mini = sizeOf(settings, settings.style, "mini");
   const setSize = (patch: Record<string, number>) =>
     commit(patch as Partial<AppSettings>);
-  const styleLabel =
-    STYLE_OPTIONS.find((o) => o.id === settings.style)?.label ?? "";
   const topMin = Math.max(TOP_MIN, -ISLAND_TOP);
 
   return (
@@ -620,7 +618,7 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
         )}
       </AnimatePresence>
 
-      <Card title={`Ukuran ${styleLabel}`}>
+      <Card title="Ukuran Island">
         <div className="grid grid-cols-2 divide-x divide-white/[0.07]">
           <SizeGroup
             title="Compact"
@@ -667,7 +665,7 @@ const AppearancePage: React.FC<PageProps> = ({ settings, commit }) => {
 
         <div className="flex items-center gap-2.5 px-4 py-3 text-[11.5px] text-white/45">
           <Info size={14} className="shrink-0" />
-          Ukuran saat diperluas (expanded) tidak ikut berubah.
+          Ukuran saat diperluas tidak ikut berubah.
         </div>
       </Card>
 
@@ -1019,8 +1017,8 @@ export const SettingsApp: React.FC = () => {
             Faisal Adriansyah
           </div>
 
-          <div className="mt-[9px] inline-flex rounded-[7px]  py-[3px] text-[10.5px] font-bold tabular-nums tracking-[0.06em] text-white/70">
-            V2026.01
+          <div className="mt-[9px] inline-flex rounded-[7px]  py-[3px] text-[10.5px] font-bold tabular-nums tracking-[0.06em] text-white">
+            Version 1.0.0
           </div>
         </div>
       </aside>
