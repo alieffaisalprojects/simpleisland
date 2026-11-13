@@ -1,16 +1,18 @@
 /**
  * File: PrayerUi.tsx
- * Kegunaan: Tampilan jadwal salat ala aplikasi cuaca modern.
- *  - Langit berganti warna mengikuti waktu salat (Subuh, Terbit, Dzuhur, Ashar, Maghrib, Isya).
- *  - Matahari dan bulan berjalan mengikuti waktu sebenarnya (terbit -> Maghrib, Maghrib -> terbit).
+ * Kegunaan: Tampilan jadwal salat bergaya aplikasi cuaca, latar hitam solid.
+ *  - Latar selalu hitam pekat. Warna aksen (progress, kartu berikutnya, titik status)
+ *    berganti halus mengikuti waktu salat: Subuh, Terbit, Dzuhur, Ashar, Maghrib, Isya.
+ *  - Matahari dan bulan berjalan mengikuti waktu sebenarnya (terbit -> Maghrib, Maghrib -> terbit),
+ *    dengan garis lintasan putus-putus yang sangat tipis.
  *  - Bulan memakai fase asli hari ini; bintang berkedip dan sesekali ada bintang jatuh.
- *  - Saat hujan: awan, tetesan air jatuh, dan tetesan yang mengenai huruf/angka
+ *  - Saat hujan: awan tipis, tetesan air jatuh, dan tetesan yang mengenai huruf/angka
  *    akan memercik, menempel, lalu menetes lagi dari bagian bawah huruf.
  *  - Suhu (°C) ditampilkan di paling kanan setelah jam.
  * Data cuaca: useWeather.ts. Jadwal salat: prayer.ts (sama seperti sebelumnya).
  */
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { Loader2, MapPin } from "lucide-react";
 import {
   FIVE,
@@ -119,21 +121,20 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
 // ---------------------------------------------------------------------------
-// Warna langit sepanjang hari (diinterpolasi mulus antar waktu salat).
+// Warna aksen sepanjang hari (diinterpolasi mulus antar waktu salat).
+// Latar tetap hitam; hanya aksen kecil yang berubah.
 // ---------------------------------------------------------------------------
 
 interface Stop {
   t: number;
-  top: RGB;
-  bot: RGB;
+  accent: RGB;
   /** Seberapa terlihat bintang (0..1). */
   star: number;
 }
 
-const NIGHT_TOP = rgb("#060a1e");
-const NIGHT_BOT = rgb("#142048");
+const NIGHT_ACCENT = rgb("#7c8cff");
 
-function skyStops(d: PrayerTimes): Stop[] {
+function accentStops(d: PrayerTimes): Stop[] {
   const m = 60000;
   const f = d.fajr.getTime();
   const s = d.sunrise.getTime();
@@ -142,23 +143,20 @@ function skyStops(d: PrayerTimes): Stop[] {
   const g = d.maghrib.getTime();
   const i = d.isha.getTime();
   return [
-    { t: f - 90 * m, top: NIGHT_TOP, bot: NIGHT_BOT, star: 1 },
-    { t: f, top: rgb("#16224f"), bot: rgb("#35457f"), star: 0.9 },
-    { t: s, top: rgb("#4a6db8"), bot: rgb("#f2a273"), star: 0.08 },
-    { t: s + 70 * m, top: rgb("#3d8ee6"), bot: rgb("#86c7f7"), star: 0 },
-    { t: z, top: rgb("#2a7de0"), bot: rgb("#62b4f6"), star: 0 },
-    { t: a, top: rgb("#3b82d4"), bot: rgb("#9cc5e8"), star: 0 },
-    { t: g - 35 * m, top: rgb("#4a74c0"), bot: rgb("#f2b46b"), star: 0 },
-    { t: g, top: rgb("#413a86"), bot: rgb("#ef7358"), star: 0.15 },
-    { t: i, top: rgb("#171f4a"), bot: rgb("#2c3170"), star: 0.8 },
-    { t: i + 90 * m, top: NIGHT_TOP, bot: NIGHT_BOT, star: 1 },
+    { t: f - 90 * m, accent: NIGHT_ACCENT, star: 1 },
+    { t: f, accent: rgb("#8f9dff"), star: 0.9 },
+    { t: s, accent: rgb("#ff9f6b"), star: 0.08 },
+    { t: s + 70 * m, accent: rgb("#ffd36b"), star: 0 },
+    { t: z, accent: rgb("#5ec2ff"), star: 0 },
+    { t: a, accent: rgb("#ffc24d"), star: 0 },
+    { t: g - 35 * m, accent: rgb("#ffa24d"), star: 0 },
+    { t: g, accent: rgb("#ff6f5e"), star: 0.15 },
+    { t: i, accent: rgb("#a58bff"), star: 0.8 },
+    { t: i + 90 * m, accent: NIGHT_ACCENT, star: 1 },
   ].sort((x, y) => x.t - y.t);
 }
 
-function sampleSky(
-  stops: Stop[],
-  t: number,
-): { top: RGB; bot: RGB; star: number } {
+function sampleStops(stops: Stop[], t: number): { accent: RGB; star: number } {
   const first = stops[0];
   const last = stops[stops.length - 1];
   if (t <= first.t) return first;
@@ -170,23 +168,12 @@ function sampleSky(
       const u = (t - a.t) / (b.t - a.t);
       const e = u * u * (3 - 2 * u);
       return {
-        top: mixRGB(a.top, b.top, e),
-        bot: mixRGB(a.bot, b.bot, e),
+        accent: mixRGB(a.accent, b.accent, e),
         star: a.star + (b.star - a.star) * e,
       };
     }
   }
   return last;
-}
-
-/** Mendungkan warna: lebih abu-abu dan sedikit lebih gelap. */
-function tint(c: RGB, k: number): RGB {
-  if (k <= 0) return c;
-  const lum = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
-  const g = lum * 0.9 + 8;
-  const grey = mixRGB(c, [g, g * 1.03, g * 1.1], k);
-  const dark = 1 - 0.2 * k;
-  return [grey[0] * dark, grey[1] * dark, grey[2] * dark];
 }
 
 const phaseTime = (phase: SkyPhase, d: PrayerTimes): number => {
@@ -242,7 +229,7 @@ function moonSprite(phase: number): HTMLCanvasElement {
   if (!g) return cv;
 
   // Sisi gelap bulan.
-  g.fillStyle = "rgba(210,215,255,0.14)";
+  g.fillStyle = "rgba(210,215,255,0.16)";
   g.beginPath();
   g.arc(c, c, r, 0, Math.PI * 2);
   g.fill();
@@ -279,7 +266,7 @@ function moonSprite(phase: number): HTMLCanvasElement {
 }
 
 // ---------------------------------------------------------------------------
-// Simulasi latar (langit, bintang, matahari/bulan, awan, hujan).
+// Simulasi latar (bintang, matahari/bulan, awan, hujan).
 // ---------------------------------------------------------------------------
 
 interface SimInput {
@@ -386,17 +373,18 @@ function makeBolt(W: number, H: number): Bolt {
 
 const RATE = [0, 30, 70, 130]; // tetes per detik (lebar 400 px)
 const RAIN_DIM = [0, 0.5, 0.75, 0.92];
-const RAIN_TINT = [0, 0.42, 0.62, 0.78];
 const RAIN_COVER = [0, 0.55, 0.75, 0.9];
 const WIND = 36;
 const GRAVITY = 900;
 
 const SUN_LOW = rgb("#ff8a4c");
 const SUN_HIGH = rgb("#fff2b8");
-const CLOUD_DAY = rgb("#f4f7ff");
-const CLOUD_NIGHT = rgb("#5f6ca0");
-const CLOUD_RAIN_DAY = rgb("#98a3b5");
-const CLOUD_RAIN_NIGHT = rgb("#3c4466");
+
+/** Awan di atas hitam: abu kebiruan tipis, lebih gelap saat hujan. */
+const CLOUD_CALM = rgb("#a8b2cd");
+const CLOUD_CALM_NIGHT = rgb("#6c78a6");
+const CLOUD_RAIN = rgb("#7d879f");
+const CLOUD_RAIN_NIGHT = rgb("#505a80");
 
 const CLOUD_BLOBS: [number, number, number][] = [
   [-0.95, 0.15, 0.6],
@@ -449,8 +437,18 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
     weather.temp === null ? "--°C" : `${Math.round(weather.temp)}°C`;
   const label = conditionLabel(weather.code, rain, thunder);
 
+  // Warna aksen saat ini (mengikuti waktu salat).
+  const fajrKey = today.fajr.getTime();
+  const stops = useMemo(() => accentStops(today), [fajrKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const accent = sampleStops(
+    stops,
+    FORCE_PHASE ? phaseTime(FORCE_PHASE, today) : nowT,
+  ).accent;
+  const accentSolid = css(accent);
+  const accentSoft = css(accent, 0.2);
+  const accentRing = css(accent, 0.7);
+
   const rootRef = useRef<HTMLDivElement>(null);
-  const skyRef = useRef<HTMLDivElement>(null);
   const backRef = useRef<HTMLCanvasElement>(null);
   const frontRef = useRef<HTMLCanvasElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -466,11 +464,10 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
 
   useEffect(() => {
     const root = rootRef.current;
-    const sky = skyRef.current;
     const back = backRef.current;
     const front = frontRef.current;
     const content = contentRef.current;
-    if (!root || !sky || !back || !front || !content) return;
+    if (!root || !back || !front || !content) return;
     const bctx = back.getContext("2d");
     const fctx = front.getContext("2d");
     if (!bctx || !fctx) return;
@@ -525,9 +522,8 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
     let nextFlash = rand(3, 8);
     let spawnAcc = 0;
     let starPrev = 0;
-    let lastSky = "";
     let stopsKey = 0;
-    let stops: Stop[] = [];
+    let simStops: Stop[] = [];
     const t0 = Date.now();
 
     // --- Pindai posisi huruf/angka di tampilan ---
@@ -617,6 +613,25 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
       });
     };
 
+    /** Lintasan putus-putus tipis tempat matahari/bulan berjalan. */
+    const drawArc = (height: number, vis: number) => {
+      bctx.save();
+      bctx.setLineDash([2, 6]);
+      bctx.lineCap = "round";
+      bctx.lineWidth = 1;
+      bctx.strokeStyle = `rgba(255,255,255,${0.1 * vis})`;
+      bctx.beginPath();
+      for (let i = 0; i <= 48; i++) {
+        const uu = i / 48;
+        const x = W * (0.06 + 0.88 * uu);
+        const y = H * 1.02 - Math.sin(Math.PI * uu) * H * height;
+        if (i === 0) bctx.moveTo(x, y);
+        else bctx.lineTo(x, y);
+      }
+      bctx.stroke();
+      bctx.restore();
+    };
+
     const drawSun = (
       x: number,
       y: number,
@@ -628,7 +643,7 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
       const pulse = 0.9 + 0.1 * Math.sin(clock * 1.7);
 
       const halo = bctx.createRadialGradient(x, y, 0, x, y, 70);
-      halo.addColorStop(0, css(col, 0.35 * vis * pulse));
+      halo.addColorStop(0, css(col, 0.3 * vis * pulse));
       halo.addColorStop(1, css(col, 0));
       bctx.fillStyle = halo;
       bctx.beginPath();
@@ -636,7 +651,7 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
       bctx.fill();
 
       const glow = bctx.createRadialGradient(x, y, 0, x, y, 26);
-      glow.addColorStop(0, css(col, 0.65 * vis));
+      glow.addColorStop(0, css(col, 0.6 * vis));
       glow.addColorStop(1, css(col, 0));
       bctx.fillStyle = glow;
       bctx.beginPath();
@@ -696,21 +711,13 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
         ? phaseTime(s.forced, s.today)
         : t0 + (Date.now() - t0) * TIME_SPEED;
 
-      // Warna langit.
+      // Tingkat bintang mengikuti waktu.
       const key = s.today.fajr.getTime();
       if (key !== stopsKey) {
         stopsKey = key;
-        stops = skyStops(s.today);
+        simStops = accentStops(s.today);
       }
-      const smp = sampleSky(stops, t);
-      const tintK = Math.max(RAIN_TINT[s.rain], s.cloud * 0.22);
-      const bg = `linear-gradient(180deg, ${css(tint(smp.top, tintK))} 0%, ${css(
-        tint(smp.bot, tintK),
-      )} 100%)`;
-      if (bg !== lastSky) {
-        lastSky = bg;
-        sky.style.background = bg;
-      }
+      const smp = sampleStops(simStops, t);
 
       const dim = s.rain > 0 ? RAIN_DIM[s.rain] : s.cloud * 0.45;
       const vis = 1 - 0.9 * dim;
@@ -780,9 +787,15 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
         }
       }
 
-      // Matahari: terbit -> Maghrib mengikuti waktu sebenarnya.
       const sr = s.today.sunrise.getTime();
       const ss = s.today.maghrib.getTime();
+      const DAY = 86400000;
+
+      // Lintasan tipis benda langit yang sedang aktif.
+      if (t >= sr && t <= ss) drawArc(0.86, vis);
+      else drawArc(0.8, vis);
+
+      // Matahari: terbit -> Maghrib mengikuti waktu sebenarnya.
       const u = (t - sr) / (ss - sr);
       if (u > -0.15 && u < 1.15) {
         const x = W * (0.06 + 0.88 * u);
@@ -792,7 +805,6 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
       }
 
       // Bulan: Maghrib -> terbit berikutnya, dengan fase asli.
-      const DAY = 86400000;
       let ms: number | null = null;
       if (t >= ss) ms = (t - ss) / (sr + DAY - ss);
       else if (t < sr) ms = (t - (ss - DAY)) / (sr - (ss - DAY));
@@ -801,7 +813,7 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
         const alt = Math.sin(Math.PI * clamp01(ms));
         const y = H * 1.02 - alt * H * 0.8;
         const aura = bctx.createRadialGradient(x, y, 0, x, y, 40);
-        aura.addColorStop(0, `rgba(205,215,255,${0.26 * vis})`);
+        aura.addColorStop(0, `rgba(205,215,255,${0.2 * vis})`);
         aura.addColorStop(1, "rgba(205,215,255,0)");
         bctx.fillStyle = aura;
         bctx.beginPath();
@@ -812,13 +824,13 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
         bctx.globalAlpha = 1;
       }
 
-      // Awan melayang.
+      // Awan melayang (tipis di atas latar hitam).
       const cover = s.rain > 0 ? RAIN_COVER[s.rain] : s.cloud * 0.6;
       if (cover > 0.03) {
         const rainMix = s.rain > 0 ? Math.min(1, 0.5 + 0.2 * s.rain) : 0;
         const col = mixRGB(
-          mixRGB(CLOUD_DAY, CLOUD_NIGHT, starLvl),
-          mixRGB(CLOUD_RAIN_DAY, CLOUD_RAIN_NIGHT, starLvl),
+          mixRGB(CLOUD_CALM, CLOUD_CALM_NIGHT, starLvl),
+          mixRGB(CLOUD_RAIN, CLOUD_RAIN_NIGHT, starLvl),
           rainMix,
         );
         const span = W * 1.5;
@@ -827,7 +839,7 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
             ((((c.x * span + clock * c.v) % span) + span) % span) - W * 0.25;
           const cy = c.y * H;
           const unit = 26 * c.s;
-          const alpha = cover * c.a * 0.55;
+          const alpha = cover * c.a * 0.2;
           for (const [bx, by, br] of CLOUD_BLOBS) {
             const px = cx + bx * unit;
             const py = cy + by * unit;
@@ -840,13 +852,6 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
             bctx.arc(px, py, rr, 0, Math.PI * 2);
             bctx.fill();
           }
-        }
-        if (s.rain > 0) {
-          const band = bctx.createLinearGradient(0, 0, 0, H * 0.55);
-          band.addColorStop(0, `rgba(20,26,40,${0.32 * RAIN_DIM[s.rain]})`);
-          band.addColorStop(1, "rgba(20,26,40,0)");
-          bctx.fillStyle = band;
-          bctx.fillRect(0, 0, W, H * 0.55);
         }
       }
 
@@ -875,8 +880,8 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
         } else {
           const a = boltAlpha(bolt.life);
 
-          // Langit ikut menyala sesaat.
-          bctx.fillStyle = `rgba(225,232,255,${a * 0.3})`;
+          // Langit hitam ikut berpendar sesaat.
+          bctx.fillStyle = `rgba(225,232,255,${a * 0.1})`;
           bctx.fillRect(0, 0, W, H);
 
           bctx.lineCap = "round";
@@ -959,7 +964,7 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
       // Tetesan latar belakang (tidak mengenai teks).
       bctx.lineCap = "round";
       bctx.lineWidth = 0.8;
-      bctx.strokeStyle = "rgba(190,215,250,0.28)";
+      bctx.strokeStyle = "rgba(190,215,250,0.24)";
       bctx.stroke(backPath);
 
       // Tetesan depan.
@@ -1024,17 +1029,10 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
   }, []);
 
   return (
-    <div ref={rootRef} className="relative h-full w-full overflow-hidden">
-      <div
-        ref={skyRef}
-        aria-hidden="true"
-        className="absolute inset-0"
-        style={{ background: "linear-gradient(180deg,#2a7de0,#62b4f6)" }}
-      />
-      <div
-        aria-hidden="true"
-        className="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent"
-      />
+    <div
+      ref={rootRef}
+      className="relative h-full w-full overflow-hidden bg-black"
+    >
       <canvas
         ref={backRef}
         aria-hidden="true"
@@ -1044,14 +1042,16 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
       <div
         ref={contentRef}
         className="relative z-10 flex h-full w-full flex-col gap-2 p-[18px] text-white"
-        style={{ textShadow: "0 1px 6px rgba(0,0,0,0.35)" }}
       >
+        {/* Baris atas: judul, tanggal, jam, suhu */}
         <div className="flex h-[26px] shrink-0 items-center gap-2">
           <div className="min-w-0 flex-1">
-            <span className="text-[13px] font-semibold">Jadwal Sholat</span>
+            <span className="text-[13px] font-semibold tracking-tight">
+              Jadwal Sholat
+            </span>
           </div>
           <div className="flex items-center gap-2 whitespace-nowrap">
-            <span className="text-[11px] text-white/60">
+            <span className="text-[11px] text-white/45">
               {shortDateIn(now, tz)}
             </span>
             <span className="text-[13px] font-semibold tabular-nums">
@@ -1060,7 +1060,7 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
             <div className="relative">
               <span
                 data-rain-box
-                className="block rounded-full bg-white/[0.16] px-2 py-[1px] text-[12px] font-semibold tabular-nums"
+                className="block rounded-full bg-white/[0.1] px-2 py-[1px] text-[12px] font-semibold tabular-nums"
               >
                 {tempText}
               </span>
@@ -1069,7 +1069,7 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
                   type="button"
                   onClick={onLocation}
                   title="Ubah lokasi"
-                  className={`flex max-w-[130px] items-center gap-1 rounded-full text-[10.5px] text-white/75 transition-colors hover:text-white ${ring}`}
+                  className={`flex max-w-[130px] items-center gap-1 rounded-full text-[10.5px] text-white/60 transition-colors hover:text-white ${ring}`}
                 >
                   {locating ? (
                     <Loader2 size={11} className="shrink-0 animate-spin" />
@@ -1082,7 +1082,7 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
                   </span>
                 </button>
                 {label && (
-                  <span className="text-[10.5px] font-medium text-white/80">
+                  <span className="text-[10.5px] font-medium text-white/70">
                     {label}
                   </span>
                 )}
@@ -1091,27 +1091,34 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
           </div>
         </div>
 
+        {/* Isi: salat berikutnya + lima waktu */}
         <div className="flex min-h-0 flex-1 items-stretch gap-[18px]">
           <div className="w-[124px] shrink-0 self-center">
-            <div className="text-[10.5px] text-white/60">Berikutnya</div>
-            <div className="mt-0.5 text-[24px] font-semibold leading-none">
+            <div className="text-[10.5px] text-white/45">Berikutnya</div>
+            <div className="mt-0.5 text-[26px] font-semibold leading-none tracking-tight">
               {PRAYER_LABEL[next.key]}
             </div>
             <div className="mt-1.5 flex items-baseline gap-1.5 whitespace-nowrap">
-              <span className="text-[13px] font-semibold tabular-nums">
+              <span
+                className="text-[13px] font-semibold tabular-nums"
+                style={{ color: accentSolid }}
+              >
                 {fmtTime(next.time, tz)}
               </span>
-              <span className="text-[10.5px] text-white/60">
+              <span className="text-[10.5px] text-white/45">
                 {countdown(next.time.getTime() - nowT)}
               </span>
             </div>
             <div
               data-rain-box
-              className="mt-2 h-[2px] w-full overflow-hidden rounded-full bg-white/20"
+              className="mt-2 h-[2px] w-full overflow-hidden rounded-full bg-white/[0.14]"
             >
               <div
-                className="h-full rounded-full bg-white/90"
-                style={{ width: `${progress * 100}%` }}
+                className="h-full rounded-full"
+                style={{
+                  width: `${progress * 100}%`,
+                  background: accentSolid,
+                }}
               />
             </div>
           </div>
@@ -1125,15 +1132,19 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
                   <div
                     key={key}
                     data-rain-box
-                    className={`min-w-0 rounded-2xl py-1.5 text-center ${
-                      isNext
-                        ? "bg-white/25 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.45)]"
-                        : "bg-white/[0.1]"
-                    }`}
-                    style={{ opacity: passed && !isNext ? 0.6 : 1 }}
+                    className="min-w-0 rounded-2xl py-1.5 text-center"
+                    style={{
+                      background: isNext
+                        ? accentSoft
+                        : "rgba(255,255,255,0.06)",
+                      boxShadow: isNext
+                        ? `inset 0 0 0 1px ${accentRing}`
+                        : "inset 0 0 0 1px rgba(255,255,255,0.08)",
+                      opacity: passed && !isNext ? 0.45 : 1,
+                    }}
                   >
                     <div
-                      className={`text-[9.5px] ${isNext ? "text-white" : "text-white/65"}`}
+                      className={`text-[9.5px] ${isNext ? "text-white" : "text-white/55"}`}
                     >
                       {PRAYER_LABEL[key]}
                     </div>

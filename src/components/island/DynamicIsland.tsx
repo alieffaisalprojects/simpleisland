@@ -151,6 +151,16 @@ const SWIPE_DIST = 56; // jarak minimal untuk next / prev (px)
 const SWIPE_MAX = 26; // island ikut bergeser maksimal (px)
 const SWIPE_BACK = { type: "spring", stiffness: 520, damping: 22 } as const;
 
+// ---- border tipis saat latar belakang gelap (ala Dynamic Island iPhone) ----
+// Rust (modul `backdrop`) mengukur seberapa gelap area di sekeliling island lalu
+// mengirim event "island-backdrop" berisi angka 0..1 (0 = terang, 1 = hitam pekat).
+// Border dibuat makin terlihat seiring latar makin gelap, dan memudar halus
+// ketika latar terang (island sudah cukup kontras, tidak butuh border).
+const EDGE_WIDTH = 1; // tebal border (px)
+const EDGE_RGB = "150, 152, 160"; // warna abu-abu (R, G, B); putih murni = "255, 255, 255"
+const EDGE_MAX_ALPHA = 0.34; // keterlihatan maksimal border (0..1), naikkan bila ingin lebih tegas
+const EDGE_FADE_S = 0.45; // lama border muncul / menghilang (detik)
+
 interface DynamicIslandProps {
   activeWidget: ActiveWidget;
   track: SpotifyTrack;
@@ -244,6 +254,14 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     active: boolean;
   } | null>(null);
   const swipeDidDrag = useRef(false); // setelah drag, klik tidak diproses
+
+  // border adaptif: 0 = latar terang (tanpa border), 1 = latar hitam (border penuh)
+  // dianimasikan lewat motion value supaya tidak memicu render ulang React
+  const edgeDark = useMotionValue(0);
+  const edgeColor = useTransform(
+    edgeDark,
+    (v) => `rgba(${EDGE_RGB}, ${(v * EDGE_MAX_ALPHA).toFixed(3)})`,
+  );
 
   const hoverIn = () => setMenuHover(true);
 
@@ -400,8 +418,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     kind === "music" && lyricsMode && !expanded && !isMini && !forceMini;
 
   // latar ikut bergeser kecuali di player expanded biasa (lihat bgFollow di atas)
-  bgFollow.current =
-    kind === "music" && !forceMini && (!expanded || lyricsMode);
+  bgFollow.current = bgFollow.current = kind === "music" && !forceMini;
 
   const lyricBase = SPOTIFY_SIZES.lyricsMini.width + adj.w;
   const lyricExtra = lyricCompact
@@ -886,6 +903,38 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     };
   }, []);
 
+  // seberapa gelap latar di sekeliling island (0..1) -> border putih tipis
+  // Rust mengirim nilai ini berkala; di sini hanya dihaluskan lalu dipakai.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    let controls: { stop: () => void } | undefined;
+
+    listen<number>("island-backdrop", (event) => {
+      const raw = Number(event.payload);
+      const dark = Math.min(1, Math.max(0, Number.isFinite(raw) ? raw : 0));
+
+      // perubahan sangat kecil diabaikan supaya tidak menganimasikan terus-menerus
+      if (Math.abs(edgeDark.get() - dark) < 0.01) return;
+
+      controls?.stop();
+      controls = animate(edgeDark, dark, {
+        duration: EDGE_FADE_S,
+        ease: "easeOut",
+      });
+    })
+      .then((stop) => (cancelled ? stop() : (unlisten = stop)))
+      .catch((error) =>
+        console.error("island-backdrop listener failed:", error),
+      );
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      controls?.stop();
+    };
+  }, [edgeDark]);
+
   // salin / potong dari menu radial (jendela lain): pil Paste menggantung di island
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -1002,6 +1051,26 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     height: TAB_H,
     borderRadius: TAB_H / 2,
     transformOrigin: `${TAB_OUT}px 50%`,
+  };
+
+  // ---- border adaptif ----
+
+  // Lapisan border terpisah di atas konten (bukan border di pil / konten itu sendiri):
+  //  - pil utama berada di dalam filter gooey, border di sana ikut terdistorsi
+  //  - konten player punya latar hitam penuh sehingga akan menutupi border / inset shadow
+  // Lapisan ini memakai `anim` dan `islandTransition` yang sama, jadi ukuran, radius,
+  // squeeze / release, dan nyembul-nya selalu sinkron dengan pil.
+  // Gaya notch / tab menempel di tepi layar, jadi sisi atas tidak diberi border.
+  const edgeStyle: MotionStyle = {
+    top: islandTop,
+    x: islandX,
+    transformOrigin: "top center",
+    boxSizing: "border-box",
+    borderStyle: "solid",
+    borderColor: edgeColor,
+    borderWidth: flush
+      ? `0px ${EDGE_WIDTH}px ${EDGE_WIDTH}px ${EDGE_WIDTH}px`
+      : `${EDGE_WIDTH}px`,
   };
 
   // ---- timer ----
@@ -1405,6 +1474,16 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           {renderMainContent()}
         </AnimatePresence>
       </motion.div>
+
+      {/* border putih tipis adaptif (hanya terlihat bila latar gelap / hitam) */}
+      <motion.div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 z-[55]"
+        style={edgeStyle}
+        initial={false}
+        animate={anim}
+        transition={islandTransition}
+      />
 
       {/* tombol kembali menu: di luar island, menempel di kiri atas */}
       <motion.div

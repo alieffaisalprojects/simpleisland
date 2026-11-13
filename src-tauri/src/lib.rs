@@ -1129,6 +1129,167 @@ mod hit_test {
                 }
             }
         });
+        
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deteksi gelap / terangnya latar di sekeliling island (untuk border adaptif)
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+mod backdrop {
+    use super::SPOTIFY_ACTIVE;
+    use crate::hit_test::{point_in_any, screen_rects};
+    use std::ffi::c_void;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    use tauri::{AppHandle, Emitter};
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+
+    const POLL_MS: u64 = 200; // jeda antar pengukuran
+    const HEARTBEAT_MS: u64 = 1500; // kirim ulang walau tidak berubah (frontend bisa telat siap)
+    const OFFSET_DIP: f64 = 5.0; // jarak titik sampel dari tepi pil
+    const DARK_FULL: f64 = 45.0; // luma <= ini: dianggap hitam penuh
+    const DARK_NONE: f64 = 100.0; // luma >= ini: dianggap terang (tanpa border)
+    const SMOOTHING: f64 = 0.6; // 0..1, makin kecil makin halus
+    const MIN_DELTA: f64 = 0.03; // perubahan minimal agar event dikirim
+
+    // 1.0 = hitam pekat, 0.0 = terang. Nilai COLORREF: 0x00BBGGRR.
+    fn darkness_of(c: u32) -> f64 {
+        let r = (c & 0xFF) as f64;
+        let g = ((c >> 8) & 0xFF) as f64;
+        let b = ((c >> 16) & 0xFF) as f64;
+        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+        let t = ((luma - DARK_FULL) / (DARK_NONE - DARK_FULL)).clamp(0.0, 1.0);
+        let smooth = t * t * (3.0 - 2.0 * t);
+        1.0 - smooth
+    }
+
+    // Rata-rata kegelapan titik-titik di sekeliling pil utama.
+    fn measure(island: HWND) -> Option<f64> {
+        let rects = screen_rects(island);
+        // rects[0] = pil utama; sisanya (pil kedua, tab, HUD) bukan latar
+        let (main, others) = rects.split_first()?;
+
+        let dpi = unsafe { GetDpiForWindow(island) };
+        let scale = if dpi == 0 { 1.0 } else { dpi as f64 / 96.0 };
+        let off = (OFFSET_DIP * scale).round() as i32;
+
+        let (l, t, r, b) = (main.left, main.top, main.right, main.bottom);
+
+        let mut pts: Vec<POINT> = Vec::with_capacity(24);
+
+        // bawah pil
+        for i in 0..=6 {
+            pts.push(POINT { x: l + (r - l) * i / 6, y: b + off });
+        }
+        // kiri dan kanan pil
+        for j in 0..=3 {
+            let y = t + (b - t) * j / 3;
+            pts.push(POINT { x: l - off, y });
+            pts.push(POINT { x: r + off, y });
+        }
+        // atas pil (hanya bila melayang; di tepi layar nilainya di luar monitor)
+        if t > off * 2 {
+            for i in 0..=4 {
+                pts.push(POINT { x: l + (r - l) * i / 4, y: t - off });
+            }
+        }
+
+        // jangan ikut menghitung titik yang jatuh di pil kedua / tab
+        let blocked: Vec<RECT> = others
+            .iter()
+            .map(|o| RECT {
+                left: o.left - off,
+                top: o.top - off,
+                right: o.right + off,
+                bottom: o.bottom + off,
+            })
+            .collect();
+
+        let mut sum = 0.0;
+        let mut count = 0u32;
+
+        unsafe {
+            let hdc = GetDC(HWND::default());
+            if hdc.is_invalid() {
+                return None;
+            }
+
+            for p in &pts {
+                if point_in_any(p, &blocked) {
+                    continue;
+                }
+
+                let c = GetPixel(hdc, p.x, p.y).0;
+                // CLR_INVALID: titik di luar layar
+                if c == 0xFFFF_FFFF {
+                    continue;
+                }
+
+                sum += darkness_of(c);
+                count += 1;
+            }
+
+            ReleaseDC(HWND::default(), hdc);
+        }
+
+        if count == 0 {
+            None
+        } else {
+            Some(sum / count as f64)
+        }
+    }
+
+    pub fn start(hwnd_raw: isize, app: AppHandle) {
+        std::thread::spawn(move || {
+            let island = HWND(hwnd_raw as *mut c_void);
+            let mut smoothed: Option<f64> = None;
+            let mut last_sent = -1.0_f64;
+            let mut last_emit: Option<Instant> = None;
+
+            loop {
+                std::thread::sleep(Duration::from_millis(POLL_MS));
+
+                if SPOTIFY_ACTIVE.load(Ordering::Relaxed) {
+                    continue;
+                }
+
+                if !super::settings::is_enabled() {
+                    continue;
+                }
+
+                if !unsafe { IsWindowVisible(island) }.as_bool() {
+                    continue;
+                }
+
+                let Some(sample) = measure(island) else {
+                    continue;
+                };
+
+                let value = match smoothed {
+                    Some(prev) => prev + (sample - prev) * SMOOTHING,
+                    None => sample,
+                };
+                smoothed = Some(value);
+
+                let changed = (value - last_sent).abs() >= MIN_DELTA;
+                let stale = last_emit
+                    .map(|t| t.elapsed() >= Duration::from_millis(HEARTBEAT_MS))
+                    .unwrap_or(true);
+
+                if changed || stale {
+                    last_sent = value;
+                    last_emit = Some(Instant::now());
+                    let _ = app.emit("island-backdrop", value as f32);
+                }
+            }
+        });
     }
 }
 
@@ -1690,6 +1851,9 @@ pub fn run() {
 
                         // Aktifkan hit test area pil.
                         hit_test::start(window.clone(), raw);
+
+                        // Ukur gelap / terangnya latar untuk border adaptif.
+backdrop::start(raw, app.handle().clone());
 
                         // Aktifkan penghindar title bar.
                         caption_avoid::start(raw, app.handle().clone());
