@@ -132,7 +132,7 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
     lyrics.status === "loading"
       ? "Memuat lirik…"
       : lyrics.status === "none"
-        ? "Lirik tidak tersedia untuk lagu ini"
+        ? "Lirik tidak tersedia"
         : lyrics.status === "idle"
           ? "Tidak ada lagu"
           : "";
