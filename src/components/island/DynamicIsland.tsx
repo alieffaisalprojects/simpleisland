@@ -83,52 +83,60 @@ const SWALLOW_POP = {
 } as const;
 
 // ---- expand -> compact (ala iOS Dynamic Island) ----
-// Dua fase supaya terasa hidup:
-//  1. squeeze : pil menciut LEBIH sempit dari ukuran compact dan sedikit
-//               "nyembul" (lebih tinggi, dan terangkat ke atas pada gaya pill)
-//  2. release : pil dilepas, melebar kembali ke ukuran compact dengan
-//               sedikit pantulan, tinggi turun halus
+// Dua fase berurutan:
+//  1. squeeze : pil menciut, jadi lebih SEMPIT dari ukuran compact dan
+//               NYEMBUL ke atas (lebih tinggi; tepi bawah diam, tepi atas naik)
+//  2. release : pil dilepas: MELEBAR ke lebar compact dengan sedikit pantulan,
+//               tinggi turun halus
+// Konten berganti dengan blur (lihat MorphLayer di SpotifyWidget.tsx).
 // Atur rasa animasi lewat konstanta di bawah ini.
 
 type CollapsePhase = "none" | "squeeze" | "release";
 
-const COLLAPSE_SQUEEZE_MS = 100; // lama fase squeeze sebelum melebar (ms)
-const COLLAPSE_RELEASE_MS = 500; // lama fase release sampai selesai (ms)
-const COLLAPSE_NARROW = 22; // seberapa sempit dari lebar compact (px)
-const COLLAPSE_POP_H = 11; // seberapa nyembul / tambahan tinggi (px)
-const COLLAPSE_LIFT = 3; // pil (melayang) terangkat ke atas (px)
-const COLLAPSE_WINDOW_DELAY = 1000; // window baru dikecilkan setelah animasi (ms)
+const COLLAPSE_SQUEEZE_MS = 120; // lama fase squeeze sebelum melebar (ms)
+const COLLAPSE_RELEASE_MS = 350; // lama fase release sampai selesai (ms)
+const COLLAPSE_NARROW = 24; // seberapa sempit dari lebar compact (px)
+const COLLAPSE_POP_H = 2; // seberapa nyembul ke atas (px)
+const COLLAPSE_WINDOW_DELAY = 950; // window dikecilkan setelah animasi (ms)
 
-// Fase squeeze: pelan dan halus (hampir tanpa pantulan)
-const COLLAPSE_SQUEEZE_SPRING = {
+// Fase squeeze: menciut cepat dan halus (hampir tanpa pantulan).
+// Tinggi lebih cepat dari lebar supaya nyembulnya terlihat sebelum melebar.
+const SQUEEZE_WIDTH = {
   type: "spring",
-  stiffness: 250,
-  damping: 28,
+  stiffness: 260,
+  damping: 2 * 0.95 * Math.sqrt(260),
   mass: 1,
 } as const;
 
-// Fase release: lebar melebar dengan sedikit pantulan (terasa hidup)
-const COLLAPSE_RELEASE_WIDTH = {
+const SQUEEZE_HEIGHT = {
   type: "spring",
-  stiffness: 190,
-  damping: 14,
-  mass: 0.95,
+  stiffness: 340,
+  damping: 2 * 0.95 * Math.sqrt(340),
+  mass: 1,
 } as const;
 
-// Fase release: tinggi dan posisi turun dengan pantulan sangat tipis
-const COLLAPSE_RELEASE_HEIGHT = {
+// Properti lain (radius, scale tekan) saat menutup: halus tanpa pantulan
+const COLLAPSE_BASE = {
   type: "spring",
-  stiffness: 220,
-  damping: 18,
+  stiffness: 240,
+  damping: 2 * Math.sqrt(240),
+  mass: 1,
+} as const;
+
+// Fase release: lebar melebar dengan pantulan lembut (terasa hidup)
+const RELEASE_WIDTH = {
+  type: "spring",
+  stiffness: 170,
+  damping: 11,
   mass: 0.9,
 } as const;
 
-// Properti lain (radius, scale) saat release: halus tanpa pantulan
-const COLLAPSE_SETTLE = {
+// Fase release: tinggi dan posisi turun dengan pantulan sangat tipis
+const RELEASE_HEIGHT = {
   type: "spring",
-  stiffness: 260,
-  damping: 2 * Math.sqrt(260),
-  mass: 1,
+  stiffness: 230,
+  damping: 17,
+  mass: 0.9,
 } as const;
 
 //lirik compact melebar saat baris panjang
@@ -321,6 +329,35 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   useEffect(() => () => window.clearTimeout(bulgeTimer.current), []);
 
+  // jalankan fase menutup: squeeze -> release -> selesai
+  const phaseExpandedRef = useRef(expanded);
+  useEffect(() => {
+    const was = phaseExpandedRef.current;
+    phaseExpandedRef.current = expanded;
+
+    // dibuka lagi di tengah animasi: batalkan semuanya
+    if (expanded) {
+      setCollapsePhase("none");
+      return;
+    }
+    if (!was) return;
+
+    setCollapsePhase("squeeze");
+    const toRelease = window.setTimeout(
+      () => setCollapsePhase("release"),
+      COLLAPSE_SQUEEZE_MS,
+    );
+    const toDone = window.setTimeout(
+      () => setCollapsePhase("none"),
+      COLLAPSE_SQUEEZE_MS + COLLAPSE_RELEASE_MS,
+    );
+
+    return () => {
+      window.clearTimeout(toRelease);
+      window.clearTimeout(toDone);
+    };
+  }, [expanded]);
+
   // ukuran dari Pengaturan (selisih dari ukuran bawaan, sesuai gaya aktif)
   // compact dan mini punya pengaturan sendiri; expanded tidak ikut diubah
   const adj = sizeOf(settings, settings.style, isMini ? "mini" : "compact");
@@ -389,23 +426,6 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // pil kedua turun
   const secTop = islandTop + (flush ? 6 : 0);
 
-  // pil HUD volume: sudut penuh seperti kapsul
-  const hudRadius = VOLUME_HUD_H / 2;
-
-  const bottomRadius = flush
-    ? expanded
-      ? hudMode
-        ? hudRadius
-        : 34
-      : Math.min(18, collapsedHeight / 2)
-    : expanded
-      ? hudMode
-        ? hudRadius
-        : 40
-      : collapsedHeight / 2;
-
-  const topRadius = flush ? 0 : bottomRadius;
-
   // ---- fase menutup: expand -> compact ----
 
   // ref ini juga dipakai efek tinggi window di bawah
@@ -413,8 +433,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   // hover idle (pil nyembul + pointer tertelan) punya animasinya sendiri,
   // jadi fase squeeze / release tidak dipakai saat itu
-  const hoverIdle = swallowOn && overIsland && !cursorBack;
-  const suppressCollapse = bulge || hoverIdle;
+  const suppressCollapse = bulge || swallowed;
 
   // render pertama setelah expanded berubah true -> false (efek fase belum jalan)
   const collapsingNow = prevExpanded.current && !expanded && !suppressCollapse;
@@ -427,50 +446,44 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     !expanded && !suppressCollapse && collapsePhase === "release";
   const collapseActive = squeezeOn || releaseOn;
 
-  // jalankan fase: squeeze -> release -> selesai
-  const phaseExpandedRef = useRef(expanded);
-  useEffect(() => {
-    const was = phaseExpandedRef.current;
-    phaseExpandedRef.current = expanded;
+  // tambahan tinggi saat nyembul
+  const popH = squeezeOn ? COLLAPSE_POP_H : 0;
 
-    // dibuka lagi di tengah animasi: batalkan semuanya
-    if (expanded) {
-      setCollapsePhase("none");
-      return;
-    }
-    if (!was) return;
-
-    setCollapsePhase("squeeze");
-    const toRelease = window.setTimeout(
-      () => setCollapsePhase("release"),
-      COLLAPSE_SQUEEZE_MS,
-    );
-    const toDone = window.setTimeout(
-      () => setCollapsePhase("none"),
-      COLLAPSE_SQUEEZE_MS + COLLAPSE_RELEASE_MS,
-    );
-
-    return () => {
-      window.clearTimeout(toRelease);
-      window.clearTimeout(toDone);
-    };
-  }, [expanded]);
-
-  // jeda konten compact (album, spektrum, timer) setelah island menutup:
-  // muncul saat pil mulai melebar kembali
+  // jeda konten compact (timer, file) setelah menutup:
+  // muncul dari blur saat pil mulai melebar
   const contentDelay = collapseActive ? COLLAPSE_CONTENT_DELAY : undefined;
+
+  // pil HUD volume: sudut penuh seperti kapsul
+  const hudRadius = VOLUME_HUD_H / 2;
+
+  // tinggi pil saat tertutup (termasuk nyembul), untuk radius kapsul
+  const shownCollapsedH = collapsedHeight + popH;
+
+  const bottomRadius = flush
+    ? expanded
+      ? hudMode
+        ? hudRadius
+        : 34
+      : Math.min(18, shownCollapsedH / 2)
+    : expanded
+      ? hudMode
+        ? hudRadius
+        : 40
+      : shownCollapsedH / 2;
+
+  const topRadius = flush ? 0 : bottomRadius;
 
   const anim = {
     // squeeze: lebih sempit dari compact, lalu release melebar ke compactWidth
     width: expanded
       ? expandedWidth
       : Math.max(30, compactWidth - (squeezeOn ? COLLAPSE_NARROW : 0)),
-    // squeeze: sedikit lebih tinggi (nyembul), lalu release turun ke tinggi compact
-    height: expanded
-      ? expandedHeight
-      : collapsedHeight + (squeezeOn ? COLLAPSE_POP_H : 0),
-    // pada gaya pill (melayang), nyembulnya juga terangkat ke atas
-    y: squeezeOn && !flush ? -COLLAPSE_LIFT : 0,
+    // squeeze: lebih tinggi (nyembul), lalu release turun ke tinggi compact
+    height: expanded ? expandedHeight : shownCollapsedH,
+    // pada gaya pill (melayang), pil naik sebesar tambahan tingginya sehingga
+    // tepi bawah diam dan tepi atas yang nyembul ke atas
+    // (gaya notch / tab menempel di tepi layar, jadi tumbuh ke bawah)
+    y: squeezeOn && !flush ? -COLLAPSE_POP_H : 0,
     // 4 sudut
     borderTopLeftRadius: topRadius,
     borderTopRightRadius: topRadius,
@@ -608,16 +621,21 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // ---- Window Tauri ----
 
   // Menutup (expand -> compact):
-  //  - squeeze : semua properti pakai pegas pelan yang halus
-  //  - release : lebar melebar dengan sedikit pantulan, tinggi turun halus
+  //  - squeeze : lebar menyempit, tinggi naik (nyembul), pegas cepat dan halus
+  //  - release : lebar melebar dengan pantulan lembut, tinggi turun halus
   const mainSpring = squeezeOn
-    ? COLLAPSE_SQUEEZE_SPRING
+    ? {
+        ...COLLAPSE_BASE,
+        width: SQUEEZE_WIDTH,
+        height: SQUEEZE_HEIGHT,
+        y: SQUEEZE_HEIGHT,
+      }
     : releaseOn
       ? {
-          ...COLLAPSE_SETTLE,
-          width: COLLAPSE_RELEASE_WIDTH,
-          height: COLLAPSE_RELEASE_HEIGHT,
-          y: COLLAPSE_RELEASE_HEIGHT,
+          ...COLLAPSE_BASE,
+          width: RELEASE_WIDTH,
+          height: RELEASE_HEIGHT,
+          y: RELEASE_HEIGHT,
         }
       : spring;
 
@@ -628,6 +646,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     lyricCompact && !collapseActive && prevExpanded.current === expanded
       ? { ...mainSpring, width: LYRIC_WIDEN_SPRING }
       : mainSpring;
+
   const appliedHeight = useRef(0); // tinggi window yang terakhir diterapkan
 
   // selisih tinggi terbesar antara compact dan mini (untuk tinggi window)

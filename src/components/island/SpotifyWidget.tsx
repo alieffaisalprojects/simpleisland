@@ -80,11 +80,14 @@ export const LYRIC_WIDEN_SPRING = {
   mass: 0.9,
 } as const;
 
-// Jeda album dan spektrum compact setelah island menutup dari expand (detik):
-// menunggu pil selesai menciut, baru muncul saat pil melebar kembali
-export const COLLAPSE_CONTENT_DELAY = 0.34;
+// Jeda konten compact (album, spektrum, timer, file) setelah island menutup dari
+// expand (detik): konten masuk dari blur saat pil mulai mengembang kembali.
+// DynamicIsland.tsx memakai nilai yang sama untuk timer dan file.
+export const COLLAPSE_CONTENT_DELAY = 0.24;
 
-// Layer konten Dynamic Island
+// Layer konten Dynamic Island.
+// Masuk : konten muncul dari blur + kecil, lalu mengembang dengan pegas lembut
+// Keluar: konten memudar cepat sambil blur dan mengecil
 export const MorphLayer: React.FC<{
   variant: "compact" | "expanded";
   width: number;
@@ -96,6 +99,9 @@ export const MorphLayer: React.FC<{
   // Mengecek apakah layer sedang expanded
   const isExpandedLayer = variant === "expanded";
 
+  // Jeda efektif sebelum konten muncul
+  const d = delay ?? (isExpandedLayer ? 0.07 : 0.1);
+
   return (
     <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
       <motion.div
@@ -103,12 +109,14 @@ export const MorphLayer: React.FC<{
         style={{
           width,
           height,
-          transformOrigin: "top center",
+          // expanded tumbuh dari atas, compact tumbuh dari tengah
+          transformOrigin: isExpandedLayer ? "top center" : "center center",
+          willChange: "transform, opacity, filter",
         }}
         initial={{
           opacity: 0,
-          scale: isExpandedLayer ? 0.94 : 0.9,
-          filter: "blur(6px)",
+          scale: isExpandedLayer ? 0.9 : 0.78,
+          filter: "blur(12px)",
         }}
         animate={{
           opacity: 1,
@@ -116,19 +124,26 @@ export const MorphLayer: React.FC<{
           filter: "blur(0px)",
           width, // berubah halus saat lebar pil berubah (lirik panjang)
           transition: {
-            duration: isExpandedLayer ? 0.3 : 0.22,
-            delay: delay ?? (isExpandedLayer ? 0.07 : 0.1),
-            ease: MORPH_EASE,
+            // opacity cepat, blur lebih lama: kesan fokus perlahan menajam
+            opacity: { duration: 0.3, delay: d, ease: "easeOut" },
+            scale: {
+              type: "spring",
+              stiffness: 230,
+              damping: 21,
+              mass: 0.9,
+              delay: d,
+            },
+            filter: { duration: 0.46, delay: d, ease: MORPH_EASE },
             width: LYRIC_WIDEN_SPRING,
           },
         }}
         exit={{
           opacity: 0,
-          scale: isExpandedLayer ? 0.95 : 0.9,
-          filter: "blur(6px)",
+          scale: isExpandedLayer ? 0.9 : 0.8,
+          filter: "blur(10px)",
           transition: {
-            duration: 0.14,
-            ease: "easeIn",
+            duration: 0.16,
+            ease: [0.4, 0, 1, 1],
           },
         }}
       >
