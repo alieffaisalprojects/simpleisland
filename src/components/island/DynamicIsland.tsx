@@ -71,15 +71,18 @@ import { IslandMenu } from "./menu/IslandMenu";
 import { VOLUME_HUD_H, VOLUME_HUD_W, VolumeHud } from "./menu/VolumeHud";
 import { useStopwatchRunning } from "./menu/stopwatchStore";
 
-//hover saat idle: pill nyembul, pointer tertelan
-const BULGE_X = 1.16;
-const BULGE_Y = 1.25;
-const BULGE_MS = 240;
+//hover saat idle: pill nyembul halus (ala Dynamic Island MacBook), pointer tertelan
+// naikkan BULGE_X / BULGE_Y kalau ingin reaksi lebih terasa
+const BULGE_X = 1.06;
+const BULGE_Y = 1.12;
+const BULGE_MS = 300;
+const BULGE_SNAP_MS = 80; // lama transisi "snap" scaleX/scaleY ke 1 setelah dibatalkan
+// pegas lembut: naik pelan, hampir tanpa pantulan
 const SWALLOW_POP = {
   type: "spring",
-  stiffness: 620,
-  damping: 15,
-  mass: 0.7,
+  stiffness: 380,
+  damping: 26,
+  mass: 0.8,
 } as const;
 
 // ---- expand -> compact (ala iOS Dynamic Island) ----
@@ -96,7 +99,7 @@ type CollapsePhase = "none" | "squeeze" | "release";
 const COLLAPSE_SQUEEZE_MS = 120; // lama fase squeeze sebelum melebar (ms)
 const COLLAPSE_RELEASE_MS = 350; // lama fase release sampai selesai (ms)
 const COLLAPSE_NARROW = 24; // seberapa sempit dari lebar compact (px)
-const COLLAPSE_POP_H = 2; // seberapa nyembul ke atas (px)
+const COLLAPSE_POP_H = 3; // seberapa nyembul ke atas (px)
 const COLLAPSE_WINDOW_DELAY = 950; // window dikecilkan setelah animasi (ms)
 
 // Fase squeeze: menciut cepat dan halus (hampir tanpa pantulan).
@@ -214,7 +217,9 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const [overIsland, setOverIsland] = useState(false);
   const [cursorBack, setCursorBack] = useState(false); // klik: pointer muncul lagi
   const [bulge, setBulge] = useState(false);
+  const [bulgeSnap, setBulgeSnap] = useState(false); // bulge dibatalkan: scaleX/Y langsung ke 1
   const bulgeTimer = useRef(0);
+  const snapTimer = useRef(0);
 
   //lebar yang dibutuhkan baris lirik compact
   const [lyricNeed, setLyricNeed] = useState(0);
@@ -223,8 +228,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const swipeX = useMotionValue(0);
   const islandX = useTransform(swipeX, (v) => `calc(-50% + ${v}px)`);
 
-  // latar pil ikut bergeser saat swipe, hanya di lirik expand
-  // (konten lirik transparan, jadi latarnya terlihat diam kalau tidak ikut)
+  // latar pil ikut bergeser saat swipe:
+  //  - compact / mini : ikut (supaya latar tidak diam sementara album dan spektrum bergeser)
+  //  - lirik expand   : ikut (konten lirik transparan, jadi latarnya terlihat diam kalau tidak ikut)
+  //  - player expand  : tidak ikut (kontennya sendiri hitam penuh)
   const bgFollow = useRef(false);
   const bgX = useTransform(
     swipeX,
@@ -295,19 +302,38 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   const showSecondary = Boolean(secondary) && !expanded && !forceMini;
 
+  // pause lama -> mini, berlaku sama untuk player maupun lirik compact
+  // (jedanya IDLE_AFTER_PAUSE_MS, dihitung di efek "pause lama -> mini" di bawah)
   const isMini =
-    forceMini ||
-    kind === "idle" ||
-    (kind === "music" && pausedIdle && !lyricsMode);
+    forceMini || kind === "idle" || (kind === "music" && pausedIdle);
 
   //pointer tertelan hanya saat idle (tidak ada aktivitas, island tertutup)
   const swallowOn = isMini && !forceMini && !expanded && !menuOpen;
   const swallowed = swallowOn && overIsland && !cursorBack;
 
+  // efek nyembul yang benar-benar dipakai untuk animasi.
+  // langsung mati begitu pointer ditekan (cursorBack) atau island terbuka
+  // (swallowOn false), tanpa menunggu timer BULGE_MS selesai.
+  const bulgeOn = bulge && swallowOn && !cursorBack;
+
   const popBulge = () => {
     window.clearTimeout(bulgeTimer.current);
     setBulge(true);
     bulgeTimer.current = window.setTimeout(() => setBulge(false), BULGE_MS);
+  };
+
+  // batalkan nyembul di tengah jalan (klik cepat): sisa lonjakan scaleX/Y
+  // di-snap ke 1 supaya tidak ikut terbawa ke animasi expand / menu
+  const cancelBulge = () => {
+    window.clearTimeout(bulgeTimer.current);
+    if (!bulge) return;
+    setBulge(false);
+    setBulgeSnap(true);
+    window.clearTimeout(snapTimer.current);
+    snapTimer.current = window.setTimeout(
+      () => setBulgeSnap(false),
+      BULGE_SNAP_MS,
+    );
   };
 
   const leaveIsland = () => {
@@ -327,7 +353,13 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     setBulge(false);
   }, [swallowOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => () => window.clearTimeout(bulgeTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(bulgeTimer.current);
+      window.clearTimeout(snapTimer.current);
+    },
+    [],
+  );
 
   // jalankan fase menutup: squeeze -> release -> selesai
   const phaseExpandedRef = useRef(expanded);
@@ -366,7 +398,11 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // lirik compact: pil melebar bila baris lirik panjang
   const lyricCompact =
     kind === "music" && lyricsMode && !expanded && !isMini && !forceMini;
-  bgFollow.current = expanded && kind === "music" && lyricsMode && !forceMini;
+
+  // latar ikut bergeser kecuali di player expanded biasa (lihat bgFollow di atas)
+  bgFollow.current =
+    kind === "music" && !forceMini && (!expanded || lyricsMode);
+
   const lyricBase = SPOTIFY_SIZES.lyricsMini.width + adj.w;
   const lyricExtra = lyricCompact
     ? Math.min(
@@ -491,12 +527,12 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     borderBottomRightRadius: bottomRadius,
     // paste tidak mengecil
     scale: getPressScale(pressed && kind !== "paste", expanded),
-    // nyembul saat hover idle
-    scaleX: bulge ? BULGE_X : 1,
-    scaleY: bulge ? BULGE_Y : 1,
+    // nyembul saat hover idle (mati langsung saat diklik / island terbuka)
+    scaleX: bulgeOn ? BULGE_X : 1,
+    scaleY: bulgeOn ? BULGE_Y : 1,
   };
 
-  const spring = bulge
+  const spring = bulgeOn
     ? SWALLOW_POP
     : expanded
       ? SPRING_EXPAND
@@ -642,10 +678,16 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // pelebaran lirik pakai pegas sendiri; buka / tutup island pakai pegas di atas
   // dipakai latar pil dan konten supaya selalu sinkron
   // (saat menutup, pegas squeeze / release tidak boleh ditimpa)
-  const islandTransition =
+  const baseTransition =
     lyricCompact && !collapseActive && prevExpanded.current === expanded
       ? { ...mainSpring, width: LYRIC_WIDEN_SPRING }
       : mainSpring;
+
+  // nyembul dibatalkan karena klik cepat: scaleX/Y langsung ke 1 (tanpa pegas),
+  // properti lain (width, height, radius) tetap memakai transisi normal
+  const islandTransition = bulgeSnap
+    ? { ...baseTransition, scaleX: { duration: 0 }, scaleY: { duration: 0 } }
+    : baseTransition;
 
   const appliedHeight = useRef(0); // tinggi window yang terakhir diterapkan
 
@@ -1323,6 +1365,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         }}
         onContextMenu={handleContextMenu}
         onPointerDown={(e) => {
+          cancelBulge(); // klik saat masih nyembul: batalkan agar tidak ikut ke animasi buka
           setPressed(true);
           setCursorBack(true); // klik kiri / kanan: pointer muncul lagi
           swipeStart(e);
