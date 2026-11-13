@@ -3,9 +3,13 @@
  * Menu radial yang muncul di dekat kursor saat file diseret (alternatif dari kotak-kotak).
  * Dipakai oleh RadialOverlay.tsx (jendela transparan layar penuh), bukan oleh island.
  *
- * Tampilan: cincin kaca transparan, irisan putih bersudut bulat dengan efek 3D
- * (gloss, bevel, bayangan), dan lingkaran tengah putih yang menampilkan nama aksi
+ * Tampilan: cincin kaca transparan, irisan bersudut bulat dengan efek 3D
+ * (gloss, bevel, bayangan), dan lingkaran tengah yang menampilkan nama aksi
  * yang sedang disorot, mis. "PNG".
+ *
+ * Dua tema (dipilih di Pengaturan > Umum):
+ *   - "light": irisan putih (bawaan).
+ *   - "dark" : irisan hitam solid, teks dan ikon putih.
  *
  * Maksimal 7 irisan per halaman. Bila aksi lebih dari 7, tiap halaman memuat 6 aksi
  * dan satu irisan "Lainnya" di kanan bawah untuk pindah ke halaman berikutnya:
@@ -44,21 +48,121 @@ const PER_PAGE = MAX_SLOTS - 1; // 6 aksi + 1 irisan "Lainnya"
 const MORE_ID = "__more";
 const DWELL_MS = 600; // tahan di "Lainnya" sekian ms = pindah halaman
 
-// warna (idle tetap putih)
-const FILL = {
-  idle: "url(#frm-face)",
-  accent: "#E6F1FF",
-  neutral: "#EFEFF3",
-  danger: "#FFE3E3",
-  armed: "#FFC8C8",
+// tema warna
+export type RadialTheme = "light" | "dark";
+
+interface Palette {
+  // warna irisan (idle, lalu saat disorot)
+  fill: {
+    idle: string;
+    accent: string;
+    neutral: string;
+    danger: string;
+    armed: string;
+  };
+  face: [string, string]; // gradasi muka irisan
+  gloss: [number, string, number][]; // [offset, warna, opacity]
+  rim: [number, string, number][];
+  ring: [number, string, number][]; // cincin kaca luar
+  disc: [number, string, number][]; // isi cincin kaca
+  ringThin: string; // garis tipis di luar irisan
+  ringThinOpacity: number;
+  shadow: { color: string; opacity: number };
+  ink: string; // teks & ikon
+  inkDanger: string;
+  inkSub: string; // teks kecil
+  spin: string;
+  ok: string;
+  err: string;
+  okText: string;
+}
+
+const PALETTES: Record<RadialTheme, Palette> = {
+  light: {
+    fill: {
+      idle: "url(#frm-face)",
+      accent: "#E6F1FF",
+      neutral: "#EFEFF3",
+      danger: "#FFE3E3",
+      armed: "#FFC8C8",
+    },
+    face: ["#FFFFFF", "#ECECF1"],
+    gloss: [
+      [0, "#FFFFFF", 0.95],
+      [0.45, "#FFFFFF", 0],
+      [0.6, "#1C1C3C", 0],
+      [1, "#1C1C3C", 0.12],
+    ],
+    rim: [
+      [0, "#FFFFFF", 1],
+      [0.5, "#FFFFFF", 0.35],
+      [1, "#000000", 0.16],
+    ],
+    ring: [
+      [0, "#FFFFFF", 0.95],
+      [0.5, "#FFFFFF", 0.25],
+      [1, "#FFFFFF", 0.7],
+    ],
+    disc: [
+      [0.55, "#FFFFFF", 0.16],
+      [1, "#FFFFFF", 0.42],
+    ],
+    ringThin: "#FFFFFF",
+    ringThinOpacity: 0.25,
+    shadow: { color: "#1A1A2E", opacity: 0.3 },
+    ink: "#1C1C1E",
+    inkDanger: "#D92D20",
+    inkSub: "#737373",
+    spin: "#404040",
+    ok: "#059669",
+    err: "#DC2626",
+    okText: "#1E8E3E",
+  },
+  dark: {
+    fill: {
+      idle: "url(#frm-face)",
+      accent: "#12304F",
+      neutral: "#2A2A30",
+      danger: "#3B1414",
+      armed: "#6B1D1D",
+    },
+    face: ["#08080A", "#08080A"], // rata: hitam solid
+    gloss: [
+      [0, "#FFFFFF", 0.07],
+      [0.45, "#FFFFFF", 0],
+      [1, "#000000", 0],
+    ],
+    rim: [
+      [0, "#FFFFFF", 0.3],
+      [0.5, "#FFFFFF", 0.1],
+      [1, "#FFFFFF", 0.05],
+    ],
+    ring: [
+      [0, "#FFFFFF", 0.4],
+      [0.5, "#FFFFFF", 0.08],
+      [1, "#FFFFFF", 0.28],
+    ],
+    disc: [
+      [0.55, "#000000", 0.3],
+      [1, "#000000", 0.55],
+    ],
+    ringThin: "#FFFFFF",
+    ringThinOpacity: 0.1,
+    shadow: { color: "#000000", opacity: 0.55 },
+    ink: "#F5F5F7",
+    inkDanger: "#FF6A5F",
+    inkSub: "#A1A1AA",
+    spin: "#D4D4D8",
+    ok: "#4ADE80",
+    err: "#F87171",
+    okText: "#4ADE80",
+  },
 };
+
 // aksi konversi: tengah menampilkan "Convert ke" + format tujuan
 const NOT_CONVERT = new Set(["img_shrink", "img_rmbg", "pdf_shrink"]);
 const isConvert = (id: string) =>
   !NOT_CONVERT.has(id) && /^(img_|pdf_|doc_|vid_|aud_)/.test(id);
-
-const INK = "#1C1C1E";
-const INK_DANGER = "#D92D20";
 
 const rad = (d: number) => (d * Math.PI) / 180;
 
@@ -126,15 +230,16 @@ const moreIndex = (n: number) =>
 type Slot = { id: string; a: FileAction | null };
 
 function wedgeFill(
+  p: Palette,
   a: FileAction | null,
   hovered: boolean,
   armed: boolean,
 ): string {
-  if (armed) return FILL.armed;
-  if (!hovered) return FILL.idle;
-  if (!a) return FILL.neutral;
-  if (a.tone === "danger") return FILL.danger;
-  return a.tone === "accent" ? FILL.accent : FILL.neutral;
+  if (armed) return p.fill.armed;
+  if (!hovered) return p.fill.idle;
+  if (!a) return p.fill.neutral;
+  if (a.tone === "danger") return p.fill.danger;
+  return a.tone === "accent" ? p.fill.accent : p.fill.neutral;
 }
 
 // ikon SVG sebagai cetakan berwarna (lihat svgMask.ts)
@@ -168,39 +273,44 @@ const MaskGlyph: React.FC<{ src: string; color: string; size: number }> = ({
 };
 
 // gradasi, bevel, dan bayangan 3D (dipakai semua irisan)
-const Defs: React.FC = () => (
+const Stops: React.FC<{ list: [number, string, number][] }> = ({ list }) => (
+  <>
+    {list.map(([offset, color, opacity]) => (
+      <stop
+        key={offset}
+        offset={offset}
+        stopColor={color}
+        stopOpacity={opacity}
+      />
+    ))}
+  </>
+);
+
+const Defs: React.FC<{ p: Palette }> = ({ p }) => (
   <defs>
     <linearGradient id="frm-face" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stopColor="#FFFFFF" />
-      <stop offset="1" stopColor="#ECECF1" />
+      <stop offset="0" stopColor={p.face[0]} />
+      <stop offset="1" stopColor={p.face[1]} />
     </linearGradient>
     <linearGradient id="frm-gloss" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stopColor="#FFFFFF" stopOpacity="0.95" />
-      <stop offset="0.45" stopColor="#FFFFFF" stopOpacity="0" />
-      <stop offset="0.6" stopColor="#1C1C3C" stopOpacity="0" />
-      <stop offset="1" stopColor="#1C1C3C" stopOpacity="0.12" />
+      <Stops list={p.gloss} />
     </linearGradient>
     <linearGradient id="frm-rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stopColor="#FFFFFF" stopOpacity="1" />
-      <stop offset="0.5" stopColor="#FFFFFF" stopOpacity="0.35" />
-      <stop offset="1" stopColor="#000000" stopOpacity="0.16" />
+      <Stops list={p.rim} />
     </linearGradient>
     <linearGradient id="frm-ring" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stopColor="#FFFFFF" stopOpacity="0.95" />
-      <stop offset="0.5" stopColor="#FFFFFF" stopOpacity="0.25" />
-      <stop offset="1" stopColor="#FFFFFF" stopOpacity="0.7" />
+      <Stops list={p.ring} />
     </linearGradient>
     <radialGradient id="frm-disc">
-      <stop offset="0.55" stopColor="#FFFFFF" stopOpacity="0.16" />
-      <stop offset="1" stopColor="#FFFFFF" stopOpacity="0.42" />
+      <Stops list={p.disc} />
     </radialGradient>
     <filter id="frm-ds" x="-20%" y="-20%" width="140%" height="150%">
       <feDropShadow
         dx="0"
         dy="4"
         stdDeviation="4"
-        floodColor="#1A1A2E"
-        floodOpacity="0.3"
+        floodColor={p.shadow.color}
+        floodOpacity={p.shadow.opacity}
       />
     </filter>
   </defs>
@@ -210,14 +320,19 @@ interface FileRadialMenuProps {
   island: FileIsland;
   // pusat lingkaran (px CSS di dalam jendela), diatur Rust (sudah ikut arah seretan)
   anchor: { x: number; y: number };
+  // warna menu: "light" (putih, bawaan) atau "dark" (hitam solid)
+  theme?: RadialTheme;
 }
 
 export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
   island,
   anchor,
+  theme = "light",
 }) => {
   const { actions, items, hoverId, armedId, status, message, run, hovering } =
     island;
+
+  const p = PALETTES[theme] ?? PALETTES.light;
 
   // posisi pusat diatur Rust (sudah dijaga tetap di dalam layar, ikut kursor)
   const cx = anchor.x;
@@ -230,7 +345,7 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
   const page = Math.min(pageRaw, pages - 1);
   const lastPage = page >= pages - 1;
 
-  const flip = () => setPage((p) => (Math.min(p, pages - 1) + 1) % pages);
+  const flip = () => setPage((n) => (Math.min(n, pages - 1) + 1) % pages);
   const flipRef = useRef(flip);
   flipRef.current = flip;
 
@@ -323,11 +438,11 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
   let title: string;
   let sub = "";
   let subTop = false;
-  let tone = INK;
+  let tone = p.ink;
 
   if (cancelOn) {
     title = "Batalkan";
-    tone = INK_DANGER;
+    tone = p.inkDanger;
   } else if (moreOn) {
     title = lastPage ? "Kembali" : "Lainnya";
     sub = `Halaman ${page + 1}/${pages}`;
@@ -341,10 +456,10 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
       subTop = true;
     }
 
-    if (focus.tone === "danger") tone = INK_DANGER;
+    if (focus.tone === "danger") tone = p.inkDanger;
   } else if (message) {
     title = message;
-    tone = hasError ? INK_DANGER : hasDone ? "#1E8E3E" : INK;
+    tone = hasError ? p.inkDanger : hasDone ? p.okText : p.ink;
   } else {
     const d = describeItems(items);
     title = d.title;
@@ -379,7 +494,7 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
           viewBox={`0 0 ${BOX} ${BOX}`}
           className="absolute inset-0"
         >
-          <Defs />
+          <Defs p={p} />
 
           {/* cincin kaca di luar */}
           <circle
@@ -396,8 +511,8 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
             cy={C}
             r={R_OUT + 3}
             fill="none"
-            stroke="#FFFFFF"
-            strokeOpacity={0.25}
+            stroke={p.ringThin}
+            strokeOpacity={p.ringThinOpacity}
             pointerEvents="none"
           />
 
@@ -427,7 +542,7 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
                   d={path}
                   filter="url(#frm-ds)"
                   style={{
-                    fill: wedgeFill(a, id === hid, id === armedId),
+                    fill: wedgeFill(p, a, id === hid, id === armedId),
                     transition: "fill 100ms",
                   }}
                 />
@@ -456,7 +571,7 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
               r={R_CENTER}
               filter="url(#frm-ds)"
               style={{
-                fill: cancelOn ? FILL.danger : FILL.idle,
+                fill: cancelOn ? p.fill.danger : p.fill.idle,
                 transition: "fill 100ms",
               }}
             />
@@ -483,7 +598,7 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
         {slices.map(({ id, a, mid, lx, ly }) => {
           const on = id === hid || id === armedId;
           const st = status[id];
-          const color = a?.tone === "danger" ? INK_DANGER : INK;
+          const color = a?.tone === "danger" ? p.inkDanger : p.ink;
           const Icon = a?.Icon;
           const label = a ? a.label.trim() : lastPage ? "Kembali" : "Lainnya";
 
@@ -505,19 +620,16 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
                 style={{ width: ICON, height: ICON }}
               >
                 {st === "running" ? (
-                  <Loader2
-                    size={20}
-                    className="animate-spin text-neutral-700"
-                  />
+                  <Loader2 size={20} className="animate-spin" color={p.spin} />
                 ) : st === "done" ? (
-                  <Check size={20} className="text-emerald-600" />
+                  <Check size={20} color={p.ok} />
                 ) : st === "error" ? (
-                  <X size={20} className="text-red-600" />
+                  <X size={20} color={p.err} />
                 ) : id === MORE_ID ? (
                   lastPage ? (
-                    <ChevronLeft size={20} color={INK} />
+                    <ChevronLeft size={20} color={p.ink} />
                   ) : (
-                    <MoreHorizontal size={20} color={INK} />
+                    <MoreHorizontal size={20} color={p.ink} />
                   )
                 ) : a?.svg ? (
                   <MaskGlyph src={a.svg} color={color} size={ICON} />
@@ -564,7 +676,10 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
               className="flex max-w-full flex-col items-center"
             >
               {sub && subTop && (
-                <span className="mb-0.5 max-w-full truncate text-[11px] font-medium text-neutral-500">
+                <span
+                  className="mb-0.5 max-w-full truncate text-[11px] font-medium"
+                  style={{ color: p.inkSub }}
+                >
                   {sub}
                 </span>
               )}
@@ -585,7 +700,10 @@ export const FileRadialMenu: React.FC<FileRadialMenuProps> = ({
               </span>
 
               {sub && !subTop && (
-                <span className="mt-0.5 max-w-full truncate text-[10px] text-neutral-500">
+                <span
+                  className="mt-0.5 max-w-full truncate text-[10px]"
+                  style={{ color: p.inkSub }}
+                >
                   {sub}
                 </span>
               )}

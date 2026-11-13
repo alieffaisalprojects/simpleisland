@@ -16,6 +16,9 @@ export type IslandStyle = "pill" | "notch" | "tab";
 // Gaya menu saat file diseret ke island: kotak-kotak atau radial
 export type FileMenuStyle = "tiles" | "radial";
 
+// Warna menu radial: putih (bawaan) atau hitam solid
+export type FileMenuTheme = "light" | "dark";
+
 // Kondisi island yang ukurannya bisa diatur:
 //   compact : island kecil saat ada aktivitas (musik, timer, file, dll.)
 //   mini    : island paling kecil saat idle / tidak ada aktivitas
@@ -29,6 +32,7 @@ export interface AppSettings {
   fileDrop: boolean;
   fileSounds: boolean;
   fileMenuStyle: FileMenuStyle;
+  fileMenuTheme: FileMenuTheme;
 
   // Tampilan
   style: IslandStyle;
@@ -103,6 +107,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fileDrop: true,
   fileSounds: true,
   fileMenuStyle: "tiles",
+  fileMenuTheme: "light",
   style: "pill",
   shoulder: 14,
   pillTop: 0,
@@ -153,6 +158,11 @@ export const STYLE_OPTIONS: { id: IslandStyle; label: string; desc: string }[] =
 export const FILE_MENU_OPTIONS: { id: FileMenuStyle; label: string }[] = [
   { id: "tiles", label: "Kotak" },
   { id: "radial", label: "Radial" },
+];
+
+export const FILE_MENU_THEME_OPTIONS: { id: FileMenuTheme; label: string }[] = [
+  { id: "light", label: "Putih" },
+  { id: "dark", label: "Hitam" },
 ];
 
 const errorText = (e: unknown) => (typeof e === "string" ? e : String(e));

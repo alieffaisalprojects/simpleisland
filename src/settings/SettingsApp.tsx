@@ -33,6 +33,10 @@ import iconUmum from "../assets/styles/settings/umum.svg";
 import iconTampilan from "../assets/styles/settings/tampilan.svg";
 import iconInstal from "../assets/styles/settings/instal.svg";
 
+// ikon baris "Warna Menu Radial" (svg hitam, dijadikan putih lewat filter)
+// (diberi nama iconRadial karena iconInstal sudah dipakai untuk tab Petunjuk Instalasi)
+import iconRadial from "../assets/styles/settings/radial.svg";
+
 // ikon baris halaman Umum (svg hitam, dijadikan putih lewat filter)
 import iconAktifkan from "../assets/styles/generals/aktifkan.svg";
 import iconOtomatis from "../assets/styles/generals/otomatis.svg";
@@ -172,6 +176,83 @@ const ActionButton: React.FC<{
   >
     {children}
   </button>
+);
+
+// pilihan warna menu radial (putih / hitam solid)
+
+type RadialTheme = "light" | "dark";
+
+const RADIAL_THEME_OPTIONS: { id: RadialTheme; label: string }[] = [
+  { id: "light", label: "Putih" },
+  { id: "dark", label: "Hitam" },
+];
+
+// gambar kecil cincin irisan
+const RadialSwatch: React.FC<{ tone: RadialTheme }> = ({ tone }) => {
+  const color = tone === "dark" ? "#050506" : "#ffffff";
+  const r = 17;
+  const seg = (2 * Math.PI * r) / 7;
+
+  return (
+    <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
+      <circle
+        cx="22"
+        cy="22"
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth="11"
+        strokeDasharray={`${seg - 2.2} 2.2`}
+        transform="rotate(-90 22 22)"
+      />
+      <circle cx="22" cy="22" r="8" fill={color} />
+    </svg>
+  );
+};
+
+const RadialThemePicker: React.FC<{
+  value: RadialTheme;
+  onChange: (value: RadialTheme) => void;
+  disabled?: boolean;
+}> = ({ value, onChange, disabled }) => (
+  <div
+    role="radiogroup"
+    aria-label="Warna menu radial"
+    className={`flex shrink-0 gap-2 ${
+      disabled ? "pointer-events-none opacity-40" : ""
+    }`}
+  >
+    {RADIAL_THEME_OPTIONS.map((o) => {
+      const selected = value === o.id;
+
+      return (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={selected}
+          onClick={() => onChange(o.id)}
+          className={`flex w-[76px] flex-col items-center gap-1.5 rounded-[12px] p-1.5 transition focus:outline-none ${
+            selected
+              ? "bg-sky-400/12 ring-2 ring-sky-300/70"
+              : "bg-white/[0.045] ring-1 ring-white/10 hover:bg-white/[0.085]"
+          }`}
+        >
+          <span
+            className="flex h-[52px] w-full items-center justify-center rounded-[8px]"
+            style={{
+              background:
+                "linear-gradient(135deg, #4f7cff 0%, #9b6bff 55%, #ff8fb1 100%)",
+            }}
+          >
+            <RadialSwatch tone={o.id} />
+          </span>
+
+          <span className="text-[11.5px] font-medium">{o.label}</span>
+        </button>
+      );
+    })}
+  </div>
 );
 
 // slider, nilai disimpan saat dilepas
@@ -467,6 +548,22 @@ const GeneralPage: React.FC<PageProps> = ({ settings, commit }) => {
             }
           />
         </Row>
+
+        {settings.fileMenuStyle === "radial" && (
+          <Row
+            icon={iconRadial}
+            title="Warna Menu Radial"
+            desc="Pilih warna menu radial Putih atau hitam."
+          >
+            <RadialThemePicker
+              value={settings.fileMenuTheme ?? "light"}
+              disabled={!settings.fileDrop}
+              onChange={(v) =>
+                commit({ fileMenuTheme: v as AppSettings["fileMenuTheme"] })
+              }
+            />
+          </Row>
+        )}
 
         <Row
           icon={iconSuara}

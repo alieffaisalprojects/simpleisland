@@ -44,6 +44,9 @@ const STYLES: [&str; 3] = ["pill", "notch", "tab"];
 // Gaya menu saat file diseret: kotak-kotak atau radial
 const FILE_MENU_STYLES: [&str; 2] = ["tiles", "radial"];
 
+// Warna menu radial: putih (bawaan) atau hitam solid
+const FILE_MENU_THEMES: [&str; 2] = ["light", "dark"];
+
 // Batas offset ukuran island (px dari ukuran bawaan)
 const WIDTH_RANGE: (i32, i32) = (-30, 60);
 const HEIGHT_RANGE: (i32, i32) = (-8, 20);
@@ -67,6 +70,8 @@ pub struct Settings {
     pub file_sounds: bool,
     // Gaya menu file: "tiles" | "radial"
     pub file_menu_style: String,
+    // Warna menu radial: "light" | "dark"
+    pub file_menu_theme: String,
 
     // Tampilan: "pill" | "notch" | "tab"
     pub style: String,
@@ -100,6 +105,7 @@ impl Default for Settings {
             file_drop: true,
             file_sounds: true,
             file_menu_style: "tiles".to_string(),
+            file_menu_theme: "light".to_string(),
             style: "pill".to_string(),
             shoulder: 14,
             pill_compact_width: 0,
@@ -127,6 +133,10 @@ impl Settings {
 
         if !FILE_MENU_STYLES.contains(&self.file_menu_style.as_str()) {
             self.file_menu_style = "tiles".to_string();
+        }
+
+        if !FILE_MENU_THEMES.contains(&self.file_menu_theme.as_str()) {
+            self.file_menu_theme = "light".to_string();
         }
 
         self.shoulder = self.shoulder.clamp(8, 24);

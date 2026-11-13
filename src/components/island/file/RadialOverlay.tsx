@@ -13,6 +13,7 @@
  *     dilepas di luar lingkaran = menu ditutup (file sudah dipindah oleh Explorer)
  *   - Rename dan Properti memakai panel yang sama dengan island (FileActionsPanel)
  *   - Salin / Potong: pil Paste menggantung di island lewat event "radial-paste"
+ *   - Warna menu (putih / hitam solid) mengikuti pengaturan fileMenuTheme
  */
 
 import React, { useEffect, useRef, useState } from "react";
@@ -189,7 +190,12 @@ export const RadialOverlay: React.FC = () => {
     <div className="fixed inset-0" onPointerDown={onPointerDown}>
       <AnimatePresence>
         {island.active && menuView && (
-          <FileRadialMenu key="radial" island={island} anchor={anchor} />
+          <FileRadialMenu
+            key="radial"
+            island={island}
+            anchor={anchor}
+            theme={settings.fileMenuTheme}
+          />
         )}
       </AnimatePresence>
 
