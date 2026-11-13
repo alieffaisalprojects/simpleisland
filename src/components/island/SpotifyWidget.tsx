@@ -66,7 +66,7 @@ export const SPOTIFY_SIZES = {
   mini: { width: 60, height: 30 },
   expanded: { width: 394, height: 188 },
   lyrics: { width: 394, height: 232 },
-  lyricsMini: { width: 300, height: 38 },
+  lyricsMini: { width: 180, height: 38 }, // lantai: baris pendek tidak lebih kecil dari ini
 } as const;
 
 // Kurva animasi morphing
@@ -1636,6 +1636,9 @@ const viewVariants = {
 // Lebar di luar teks lirik: padding, album, jarak, spektrum, dan margin pudar
 const LYRIC_MINI_CHROME = 116;
 
+// Batas lebar pil untuk teks non-lirik (judul lagu / "Memuat lirik…")
+const LYRIC_MINI_TITLE_MAX = 300;
+
 const LyricMiniView: React.FC<{
   track: SpotifyTrack;
   palette: string[];
@@ -1659,11 +1662,17 @@ const LyricMiniView: React.FC<{
   useLayoutEffect(() => {
     const textWidth = measureRef.current?.offsetWidth ?? 0;
 
-    // Hanya baris lirik asli yang melebarkan pil
+    if (textWidth <= 0) {
+      onNeedWidth?.(0);
+      return;
+    }
+
+    const need = Math.ceil(textWidth) + LYRIC_MINI_CHROME;
+
+    // Baris lirik asli: ikut lebar teks (batas atas diatur island seperti sebelumnya).
+    // Teks lain (judul / memuat): dibatasi supaya tidak melebar berlebihan.
     onNeedWidth?.(
-      lyrics.status === "ready" && textWidth > 0
-        ? Math.ceil(textWidth) + LYRIC_MINI_CHROME
-        : 0,
+      lyrics.status === "ready" ? need : Math.min(need, LYRIC_MINI_TITLE_MAX),
     );
   }, [text, lyrics.status, onNeedWidth]);
 

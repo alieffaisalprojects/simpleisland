@@ -14,15 +14,30 @@ const EMPTY: LyricsState = {
 
 // ---------------------------------------------------------------------------
 // Cache: lirik + terjemahan diambil sekali per lagu, lalu disimpan.
-// Disimpan di memori (cepat) dan localStorage (bertahan setelah aplikasi ditutup).
+// Disimpan di memori (cepat) dan localStorage (bertahan setelah aplikasi ditutup,
+// jadi lagu yang pernah diputar tetap punya lirik walau offline).
+//
+// Aturan penggantian:
+//  - maksimal MAX_ENTRIES lagu
+//  - selama belum penuh, tidak ada yang dibuang (berapa lama pun tidak diputar)
+//  - saat penuh dan ada lagu baru, lagu yang paling lama tidak diputar
+//    (lirik + terjemahannya) digantikan lagu baru (LRU)
+//  - lagu tanpa lirik tidak ikut disimpan / dihitung (hanya diingat di memori
+//    selama aplikasi jalan, dicek lagi setelah NONE_TTL_MS)
+//  - lagu BARU (belum pernah tersimpan) baru masuk cache setelah diputar
+//    minimal MIN_PLAY_MS; kalau di-skip sebelum itu, tidak disimpan.
+//    Lagu yang sudah tersimpan tidak pernah dihapus karena di-skip.
 // ---------------------------------------------------------------------------
 
 const STORE_PREFIX = "lyrics:v1:"; // satu kunci per lagu
-const INDEX_KEY = "lyrics-index:v1"; // urutan pemakaian (terlama di depan)
+const INDEX_KEY = "lyrics-index:v2"; // daftar [kunci, waktu terakhir diputar]
+const LEGACY_INDEX_KEY = "lyrics-index:v1"; // format lama (hanya urutan), dimigrasi
 const MAX_ENTRIES = 200; // jumlah lagu maksimum yang disimpan
+const TOUCH_MIN_MS = 60 * 1000; // jangan tulis ulang indeks kalau baru saja diperbarui
 const NONE_TTL_MS = 24 * 60 * 60 * 1000; // "lirik tidak ada" dicek lagi setelah 24 jam
 const TR_RETRY_MS = 10 * 60 * 1000; // terjemahan yang gagal dicoba lagi setelah 10 menit
 const TRANSLATE_COOLDOWN_MS = 2 * 60 * 1000; // setelah terjemahan gagal, istirahat dulu
+const MIN_PLAY_MS = 10 * 1000; // lagu baru baru boleh disimpan setelah diputar segini lama
 
 interface Entry {
   state: LyricsState;
@@ -32,26 +47,124 @@ interface Entry {
 
 const mem = new Map<string, Entry>();
 
+// Lagu baru yang sudah diputar >= MIN_PLAY_MS (sesi ini) -> boleh disimpan
+const confirmed = new Set<string>();
+// Lirik lagu baru yang sedang diputar, belum lolos 10 detik: belum masuk cache
+const pending = new Map<string, Entry>();
+// Lagu yang sedang aktif; hasil fetch lagu lain yang belum tersimpan dibuang
+let activeKey = "";
+
+const isOffline = () =>
+  typeof navigator !== "undefined" && navigator.onLine === false;
+
 const makeKey = (track: SpotifyTrack) =>
   track.title
     ? `${track.title.trim()}::${track.artist.trim()}`.toLowerCase()
     : "";
 
-function readIndex(): string[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(INDEX_KEY) ?? "[]");
-    return Array.isArray(v) ? v.filter((k) => typeof k === "string") : [];
-  } catch {
-    return [];
-  }
-}
+// Indeks: kunci lagu -> waktu terakhir diputar (ms). Dimuat sekali, lalu dijaga di memori.
+let index: Map<string, number> | null = null;
 
-function writeIndex(idx: string[]) {
+function saveIndex() {
+  if (!index) return;
   try {
-    localStorage.setItem(INDEX_KEY, JSON.stringify(idx));
+    localStorage.setItem(INDEX_KEY, JSON.stringify(Array.from(index)));
   } catch {
     /* abaikan */
   }
+}
+
+function dropKey(key: string) {
+  mem.delete(key);
+  pending.delete(key);
+  index?.delete(key);
+  try {
+    localStorage.removeItem(STORE_PREFIX + key);
+  } catch {
+    /* abaikan */
+  }
+}
+
+// Hanya bekerja saat cache melebihi batas: buang yang paling lama tidak diputar.
+// `keep` = lagu yang sedang ditulis, tidak boleh ikut dibuang.
+function prune(keep = "") {
+  const idx = getIndex();
+
+  if (idx.size > MAX_ENTRIES) {
+    const oldest = Array.from(idx)
+      .filter(([k]) => k !== keep)
+      .sort((a, b) => a[1] - b[1]);
+    for (const [k] of oldest.slice(0, idx.size - MAX_ENTRIES)) dropKey(k);
+  }
+}
+
+function getIndex(): Map<string, number> {
+  if (index) return index;
+
+  const map = new Map<string, number>();
+  index = map;
+
+  try {
+    const v = JSON.parse(localStorage.getItem(INDEX_KEY) ?? "[]");
+    if (Array.isArray(v)) {
+      for (const p of v) {
+        if (
+          Array.isArray(p) &&
+          typeof p[0] === "string" &&
+          typeof p[1] === "number"
+        ) {
+          map.set(p[0], p[1]);
+        }
+      }
+    }
+  } catch {
+    /* indeks rusak: dibangun ulang dari isi penyimpanan di bawah */
+  }
+
+  // Samakan indeks dengan isi penyimpanan:
+  // - lagu yang ada datanya tapi belum terindeks (migrasi dari v1) dianggap baru diputar
+  // - indeks tanpa data dibuang
+  try {
+    const now = Date.now();
+    const found = new Set<string>();
+    const legacyNone: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(STORE_PREFIX)) continue;
+      // Sisa versi lama: entri "lirik tidak ada" tidak lagi disimpan, jadi dibuang
+      if (localStorage.getItem(k)?.includes('"status":"none"')) {
+        legacyNone.push(k);
+        continue;
+      }
+      found.add(k.slice(STORE_PREFIX.length));
+    }
+    for (const k of legacyNone) localStorage.removeItem(k);
+    for (const k of found) if (!map.has(k)) map.set(k, now);
+    for (const k of Array.from(map.keys())) if (!found.has(k)) map.delete(k);
+    localStorage.removeItem(LEGACY_INDEX_KEY);
+  } catch {
+    /* abaikan */
+  }
+
+  prune();
+  saveIndex();
+  return map;
+}
+
+function removeEntry(key: string) {
+  dropKey(key);
+  saveIndex();
+}
+
+// Tandai lagu baru saja diputar (memperpanjang umurnya di cache)
+function touch(key: string) {
+  const idx = getIndex();
+  const prev = idx.get(key);
+  if (prev === undefined) return;
+  const now = Date.now();
+  if (now - prev < TOUCH_MIN_MS) return;
+  idx.set(key, now);
+  saveIndex();
 }
 
 function readEntry(key: string): Entry | null {
@@ -77,6 +190,9 @@ function readEntry(key: string): Entry | null {
     if (entry) mem.set(key, entry);
   }
 
+  // Lagu baru yang belum lolos 10 detik
+  if (!entry) entry = pending.get(key) ?? null;
+
   if (entry && entry.exp > 0 && Date.now() >= entry.exp) {
     removeEntry(key);
     return null;
@@ -85,44 +201,38 @@ function readEntry(key: string): Entry | null {
   return entry;
 }
 
-function removeEntry(key: string) {
-  mem.delete(key);
-  try {
-    localStorage.removeItem(STORE_PREFIX + key);
-  } catch {
-    /* abaikan */
-  }
-  writeIndex(readIndex().filter((k) => k !== key));
-}
-
 function writeEntry(key: string, entry: Entry) {
+  // Lagu tanpa lirik hanya diingat di memori (tidak disimpan, tidak dihitung)
+  if (entry.state.status === "none") {
+    mem.set(key, entry);
+    return;
+  }
+
+  // Lagu baru yang belum lolos 10 detik: tahan di pending, jangan masuk cache.
+  // Kalau lagunya sudah bukan yang aktif (di-skip), buang saja.
+  if (!confirmed.has(key) && !getIndex().has(key)) {
+    if (key === activeKey) pending.set(key, entry);
+    return;
+  }
+
+  pending.delete(key);
   mem.set(key, entry);
 
-  const idx = readIndex().filter((k) => k !== key);
-  idx.push(key);
-
-  const evict = (n: number) => {
-    for (const old of idx.splice(0, n)) {
-      mem.delete(old);
-      try {
-        localStorage.removeItem(STORE_PREFIX + old);
-      } catch {
-        /* abaikan */
-      }
-    }
-  };
-
-  // Batasi jumlah lagu (entri terlama dibuang)
-  if (idx.length > MAX_ENTRIES) evict(idx.length - MAX_ENTRIES);
+  const idx = getIndex();
+  idx.set(key, Date.now());
+  prune(key);
 
   const json = JSON.stringify(entry);
 
   try {
     localStorage.setItem(STORE_PREFIX + key, json);
   } catch {
-    // Penyimpanan penuh: buang sebagian entri terlama lalu coba sekali lagi
-    evict(Math.max(10, Math.ceil(idx.length / 4)));
-    idx.push(key);
+    // Penyimpanan penuh: buang seperempat entri terlama lalu coba sekali lagi
+    const oldest = Array.from(idx)
+      .filter(([k]) => k !== key)
+      .sort((a, b) => a[1] - b[1]);
+    const n = Math.max(10, Math.ceil(oldest.length / 4));
+    for (const [k] of oldest.slice(0, n)) dropKey(k);
     try {
       localStorage.setItem(STORE_PREFIX + key, json);
     } catch {
@@ -130,7 +240,14 @@ function writeEntry(key: string, entry: Entry) {
     }
   }
 
-  writeIndex(Array.from(new Set(idx)));
+  saveIndex();
+}
+
+// Lagu sudah diputar cukup lama: sekarang boleh disimpan permanen
+function commitKey(key: string) {
+  confirmed.add(key);
+  const e = pending.get(key);
+  if (e) writeEntry(key, e);
 }
 
 // ---------------------------------------------------------------------------
@@ -309,9 +426,11 @@ interface Job {
 const jobs = new Map<string, Job>();
 
 // Entri sudah ada tapi terjemahannya belum, dan sudah waktunya dicoba lagi
+// (saat offline tidak perlu mencoba: lirik tersimpan langsung ditampilkan)
 const needsTranslation = (e: Entry) =>
   e.state.status === "ready" &&
   !e.state.translated &&
+  !isOffline() &&
   Date.now() >= e.trRetryAt &&
   Date.now() >= translateBlockedUntil;
 
@@ -339,10 +458,13 @@ function startJob(
     if (existing) {
       base = existing.state; // lirik sudah tersimpan: hanya terjemahan yang diulang
     } else {
-      const res = await fetchLyrics(title, artist, duration);
+      // Offline dan belum ada di cache: langsung gagal sementara, tanpa menunggu timeout
+      const res: LyricsResult = isOffline()
+        ? { kind: "error" }
+        : await fetchLyrics(title, artist, duration);
 
       // Gagal sementara: tampilkan "tidak ada" tetapi JANGAN disimpan,
-      // supaya lagu ini dicoba lagi nanti.
+      // supaya lagu ini dicoba lagi nanti (otomatis saat kembali online).
       if (res.kind === "error") return { ...EMPTY, status: "none" };
 
       if (res.kind === "none") {
@@ -357,12 +479,13 @@ function startJob(
 
       base = { ...EMPTY, status: "ready", lines: res.lines };
       // Simpan lirik dulu; terjemahan menyusul
+      // (lagu baru ditahan di pending sampai lolos MIN_PLAY_MS)
       writeEntry(key, { state: base, trRetryAt: 0, exp: 0 });
     }
 
     publish(base);
 
-    if (Date.now() < translateBlockedUntil) return base;
+    if (isOffline() || Date.now() < translateBlockedUntil) return base;
 
     try {
       const tr = await translateLines(base.lines.map((l) => l.text));
@@ -375,6 +498,8 @@ function startJob(
       writeEntry(key, { state: full, trRetryAt: 0, exp: 0 });
       return full;
     } catch {
+      // Putus di tengah jalan: bukan salah layanan, cukup coba lagi nanti
+      if (isOffline()) return base;
       // Dibatasi / gagal: istirahat sebentar, lirik tetap tampil tanpa terjemahan
       translateBlockedUntil = Date.now() + TRANSLATE_COOLDOWN_MS;
       writeEntry(key, {
@@ -399,6 +524,27 @@ function startJob(
 export function useLyrics(track: SpotifyTrack): LyricsState {
   const key = makeKey(track);
   const [state, setState] = useState<LyricsState>(EMPTY);
+  const [onlineTick, setOnlineTick] = useState(0);
+
+  // Saat koneksi kembali, lagu yang gagal diambil / belum diterjemahkan dicoba lagi
+  useEffect(() => {
+    const onOnline = () => setOnlineTick((n) => n + 1);
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, []);
+
+  // Lagu baru baru disimpan ke cache kalau diputar minimal MIN_PLAY_MS.
+  // Kalau di-skip sebelum itu, hasilnya dibuang (lagu yang sudah tersimpan tidak terpengaruh).
+  // Harus dideklarasikan sebelum effect utama supaya `activeKey` sudah benar saat job mulai.
+  useEffect(() => {
+    activeKey = key;
+    if (!key) return;
+    const t = window.setTimeout(() => commitKey(key), MIN_PLAY_MS);
+    return () => {
+      window.clearTimeout(t);
+      if (!confirmed.has(key)) pending.delete(key);
+    };
+  }, [key]);
 
   useEffect(() => {
     if (!key) {
@@ -406,8 +552,11 @@ export function useLyrics(track: SpotifyTrack): LyricsState {
       return;
     }
 
-    // Sudah ada di cache: tampilkan langsung, tanpa permintaan jaringan
     const hit = readEntry(key);
+    // Lagu ini sedang diputar: perpanjang umurnya di cache
+    if (hit) touch(key);
+
+    // Sudah ada di cache: tampilkan langsung, tanpa permintaan jaringan
     if (hit && !needsTranslation(hit) && !jobs.has(key)) {
       setState(hit.state);
       return;
@@ -437,7 +586,7 @@ export function useLyrics(track: SpotifyTrack): LyricsState {
     };
     // Abaikan pemeriksaan dependensi.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, onlineTick]);
 
   return state;
 }

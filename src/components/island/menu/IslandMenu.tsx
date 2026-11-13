@@ -122,7 +122,10 @@ const TILE_GLASS =
   "bg-[#050506]/60 ring-1 ring-white/[0.08] hover:bg-[#050506]/75";
 
 interface TileProps {
+  /** Nama lengkap (dibaca pembaca layar / aria-label). */
   name: string;
+  /** Tulisan pendek di label hover. Bila kosong, memakai `name`. */
+  label?: string;
   icon: string;
   active?: boolean;
   tone?: TileTone;
@@ -134,6 +137,7 @@ interface TileProps {
 
 const MenuTile: React.FC<TileProps> = ({
   name,
+  label,
   icon,
   active,
   tone = "sky",
@@ -143,47 +147,77 @@ const MenuTile: React.FC<TileProps> = ({
 }) => {
   const lit = TILE_LIT[tone];
 
+  // Label hover: sama persis dengan label kotak aksi file
+  // (file/FileActionsPanel.tsx), pil hitam kecil di atas tombol.
+  const [hot, setHot] = useState(false);
+
   return (
-    <motion.button
-      type="button"
-      aria-label={name}
-      title={name}
-      onClick={() => {
-        playSfx(dropSound);
-        onClick();
-      }}
-      onContextMenu={
-        onContext
-          ? (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              playSfx(dropSound);
-              onContext();
-            }
-          : undefined
-      }
-      onMouseEnter={() => playSfx(chooseSound)}
-      whileHover={{ scale: 1.06 }}
-      whileTap={{ scale: 0.93 }}
-      transition={{ type: "spring", stiffness: 520, damping: 28 }}
-      className={`relative flex min-w-0 flex-1 items-center justify-center rounded-[20px] transition-colors ${
-        active ? lit : TILE_GLASS
-      } ${ring}`}
+    // Pembungkus: menjaga ukuran tombol di baris, dan menaikkan label di atas tombol lain
+    <div
+      className="relative flex min-w-0 flex-1"
+      style={{ zIndex: hot ? 30 : 0 }}
     >
-      {/* Ikon menu. */}
-      <img
-        src={icon}
-        alt=""
-        draggable={false}
-        className="h-[36px] w-[36px] select-none invert"
-      />
-      {dot && (
-        <span
-          aria-hidden="true"
-          className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-[#F5D547]"
+      <motion.button
+        type="button"
+        aria-label={name}
+        onClick={() => {
+          playSfx(dropSound);
+          onClick();
+        }}
+        onContextMenu={
+          onContext
+            ? (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                playSfx(dropSound);
+                onContext();
+              }
+            : undefined
+        }
+        onMouseEnter={() => {
+          setHot(true);
+          playSfx(chooseSound);
+        }}
+        onMouseLeave={() => setHot(false)}
+        whileHover={{ scale: 1.06 }}
+        whileTap={{ scale: 0.93 }}
+        transition={{ type: "spring", stiffness: 520, damping: 28 }}
+        className={`relative flex h-full w-full min-w-0 items-center justify-center rounded-[20px] transition-colors ${
+          active ? lit : TILE_GLASS
+        } ${ring}`}
+      >
+        {/* Ikon menu. */}
+        <img
+          src={icon}
+          alt=""
+          draggable={false}
+          className="h-[36px] w-[36px] select-none invert"
         />
-      )}
-    </motion.button>
+        {dot && (
+          <span
+            aria-hidden="true"
+            className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-[#F5D547]"
+          />
+        )}
+      </motion.button>
+
+      {/* Label hover */}
+      <AnimatePresence>
+        {hot && (
+          <span className="pointer-events-none absolute inset-x-0 -top-[27px] flex justify-center">
+            <motion.span
+              initial={{ opacity: 0, y: 4, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 2, scale: 0.95 }}
+              transition={{ duration: 0.12 }}
+              className="whitespace-nowrap rounded-full bg-black/85 px-2.5 py-[4px] text-[10.5px] font-medium leading-none text-white ring-1 ring-white/20"
+            >
+              {label ?? name}
+            </motion.span>
+          </span>
+        )}
+      </AnimatePresence>
+    </div>
   );
 };
 
@@ -232,6 +266,7 @@ const HomeView: React.FC<{
         <div className="flex min-h-0 flex-1 gap-2">
           <MenuTile
             name={`Wi-Fi (klik kanan: ${radios.wifiOn ? "matikan" : "nyalakan"})`}
+            label="Wi-Fi"
             icon={wifiIcon}
             active={radios.wifiOn}
             onClick={() => onOpen("wifi")}
@@ -239,6 +274,7 @@ const HomeView: React.FC<{
           />
           <MenuTile
             name={`Bluetooth (klik kanan: ${radios.bluetoothOn ? "matikan" : "nyalakan"})`}
+            label="Bluetooth"
             icon={bluetoothIcon}
             active={radios.bluetoothOn}
             onClick={() => onOpen("bluetooth")}
@@ -246,6 +282,7 @@ const HomeView: React.FC<{
           />
           <MenuTile
             name={`Mode pesawat (${radios.airplane ? "nyala" : "mati"})`}
+            label="Mode pesawat"
             icon={airplaneIcon}
             active={radios.airplane}
             tone="amber"
@@ -256,6 +293,13 @@ const HomeView: React.FC<{
               volume.supported
                 ? `Volume: ${volume.muted ? "senyap" : `${volume.level}%`}`
                 : "Volume (perangkat audio tidak ditemukan)"
+            }
+            label={
+              volume.supported
+                ? volume.muted
+                  ? "Volume senyap"
+                  : `Volume ${volume.level}%`
+                : "Volume tidak tersedia"
             }
             icon={speakerIcon}
             onClick={() => {

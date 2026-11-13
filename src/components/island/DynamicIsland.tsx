@@ -100,6 +100,24 @@ const COLLAPSE_SQUEEZE_MS = 120; // lama fase squeeze sebelum melebar (ms)
 const COLLAPSE_RELEASE_MS = 350; // lama fase release sampai selesai (ms)
 const COLLAPSE_NARROW = 24; // seberapa sempit dari lebar compact (px)
 const COLLAPSE_POP_H = 3; // seberapa nyembul ke atas (px)
+
+// Khusus expand -> mini (mis. player dipause lalu ditutup): pil mini jauh lebih
+// kecil dari compact, jadi menciut 24 px terasa keterlaluan. Dipakai nilai lebih
+// kecil, dan penciutan dibatasi maksimal sekian persen dari lebar pil mini.
+const COLLAPSE_NARROW_MINI = 0; // seberapa sempit dari lebar mini (px), 0 = tidak menciut
+const COLLAPSE_NARROW_MINI_MAX = 0.05; // batas: maksimal 5% dari lebar mini
+const COLLAPSE_POP_H_MINI = 0; // nyembul ke atas untuk mini (px), 0 = tidak nyembul
+
+// Penyebab utama mini terlalu kecil: pegas "release" memantul (underdamped) dan
+// ukuran awalnya masih jauh dari mini (pil expanded besar), jadi lebar / tinggi
+// meluncur MELEWATI ukuran mini lalu balik lagi. Untuk mini dipakai pegas tanpa
+// pantulan (critically damped) supaya berhenti tepat di ukuran dari Pengaturan.
+const RELEASE_MINI = {
+  type: "spring",
+  stiffness: 260,
+  damping: 2 * Math.sqrt(260),
+  mass: 1,
+} as const;
 const COLLAPSE_WINDOW_DELAY = 950; // window dikecilkan setelah animasi (ms)
 
 // Fase squeeze: menciut cepat dan halus (hampir tanpa pantulan).
@@ -161,18 +179,20 @@ const EDGE_RGB = "150, 152, 160"; // warna abu-abu (R, G, B); putih murni = "255
 const EDGE_MAX_ALPHA = 0.34; // keterlihatan maksimal border (0..1), naikkan bila ingin lebih tegas
 const EDGE_FADE_S = 0.45; // lama border muncul / menghilang (detik)
 
-// ---- latar pil di halaman utama menu (gaya radial) ----
-// Di atas hitam solid (tempat status bar), makin ke bawah makin transparan.
+// ---- latar pil bergradien (gaya radial) ----
+// Dipakai di halaman utama menu DAN di panel aksi file (Copy, Cut, PDF, dll.).
+// Di atas hitam solid (tempat status bar / header), makin ke bawah makin transparan.
 // Atur titik-titiknya di GLASS_GRADIENT: angka pertama = alpha (1 solid, 0 transparan),
-// persen = posisi dari atas ke bawah panel. Warna tombol ada di IslandMenu.tsx (TILE_GLASS).
+// persen = posisi dari atas ke bawah panel. Warna tombol menu ada di IslandMenu.tsx
+// (TILE_GLASS), warna kotak aksi file ada di file/FileActionsPanel.tsx (TONE).
 const GLASS_FADE_S = 0.25; // latar belakang menu
 const GLASS_GRADIENT =
   "linear-gradient(to bottom, " +
   "rgba(5, 5, 6, 1) 0%, " +
   "rgba(5, 5, 6, 1) 28%, " +
   "rgba(5, 5, 6, 0.80) 50%, " +
-  "rgba(5, 5, 6, 0.6) 75%, " +
-  "rgba(5, 5, 6, 0.20) 100%)";
+  "rgba(5, 5, 6, 0.6) 85%, " +
+  "rgba(5, 5, 6, 0.50) 100%)";
 
 interface DynamicIslandProps {
   activeWidget: ActiveWidget;
@@ -487,10 +507,15 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const shoulder = settings.style === "notch" ? settings.shoulder : 0;
   const islandTop = flush ? 0 : Math.max(0, ISLAND_TOP + settings.pillTop);
 
-  // halaman utama menu: panel island transparan (gaya radial). Hanya tombol
-  // (hitam transparan) dan status bar (hitam solid) yang terlihat di atas wallpaper.
-  // Berlaku di halaman utama saja; sub-halaman dan HUD volume tetap hitam solid.
-  const menuGlass = kind === "menu" && menuView === "home" && !hudMode;
+  // latar bergradien (hitam solid di atas -> transparan di bawah, gaya radial).
+  // Berlaku di:
+  //  - halaman utama menu (status bar hitam solid + tombol hitam transparan)
+  //  - panel aksi file saat file diseret / dilepas (Copy, Cut, PDF, dll.)
+  // Sub-halaman menu, Rename / Properti file, dan HUD volume tetap hitam solid
+  // supaya teks dan kolom isiannya mudah dibaca.
+  const fileGlass = kind === "file" && expanded && fileIsland.view === "menu";
+  const menuGlass =
+    (kind === "menu" && menuView === "home" && !hudMode) || fileGlass;
 
   // pil kedua turun
   const secTop = islandTop + (flush ? 6 : 0);
@@ -515,8 +540,15 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     !expanded && !suppressCollapse && collapsePhase === "release";
   const collapseActive = squeezeOn || releaseOn;
 
+  // seberapa sempit dan seberapa nyembul saat squeeze:
+  // ke mini dibuat lebih halus supaya tidak menciut keterlaluan
+  const collapseNarrow = isMini
+    ? Math.min(COLLAPSE_NARROW_MINI, compactWidth * COLLAPSE_NARROW_MINI_MAX)
+    : COLLAPSE_NARROW;
+  const collapsePop = isMini ? COLLAPSE_POP_H_MINI : COLLAPSE_POP_H;
+
   // tambahan tinggi saat nyembul
-  const popH = squeezeOn ? COLLAPSE_POP_H : 0;
+  const popH = squeezeOn ? collapsePop : 0;
 
   // jeda konten compact (timer, file) setelah menutup:
   // muncul dari blur saat pil mulai melebar
@@ -546,13 +578,13 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     // squeeze: lebih sempit dari compact, lalu release melebar ke compactWidth
     width: expanded
       ? expandedWidth
-      : Math.max(30, compactWidth - (squeezeOn ? COLLAPSE_NARROW : 0)),
+      : Math.max(30, compactWidth - (squeezeOn ? collapseNarrow : 0)),
     // squeeze: lebih tinggi (nyembul), lalu release turun ke tinggi compact
     height: expanded ? expandedHeight : shownCollapsedH,
     // pada gaya pill (melayang), pil naik sebesar tambahan tingginya sehingga
     // tepi bawah diam dan tepi atas yang nyembul ke atas
     // (gaya notch / tab menempel di tepi layar, jadi tumbuh ke bawah)
-    y: squeezeOn && !flush ? -COLLAPSE_POP_H : 0,
+    y: squeezeOn && !flush ? -collapsePop : 0,
     // 4 sudut
     borderTopLeftRadius: topRadius,
     borderTopRightRadius: topRadius,
@@ -702,9 +734,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     : releaseOn
       ? {
           ...COLLAPSE_BASE,
-          width: RELEASE_WIDTH,
-          height: RELEASE_HEIGHT,
-          y: RELEASE_HEIGHT,
+          // mini: tanpa pantulan (tidak melewati ukuran mini); compact: tetap memantul lembut
+          width: isMini ? RELEASE_MINI : RELEASE_WIDTH,
+          height: isMini ? RELEASE_MINI : RELEASE_HEIGHT,
+          y: isMini ? RELEASE_MINI : RELEASE_HEIGHT,
         }
       : spring;
 
@@ -1380,7 +1413,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           animate={anim}
           transition={islandTransition}
         >
-          {/* latar hitam solid (semua tampilan kecuali halaman utama menu) */}
+          {/* latar hitam solid (semua tampilan kecuali yang memakai latar gradien) */}
           <motion.div
             aria-hidden
             className="absolute inset-0 bg-[#050506]"
@@ -1390,7 +1423,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             transition={{ duration: GLASS_FADE_S }}
           />
 
-          {/* latar gradien halaman utama menu: solid di atas, transparan di bawah */}
+          {/* latar gradien (menu utama + panel aksi file): solid di atas, transparan di bawah */}
           <motion.div
             aria-hidden
             className="absolute inset-0"
@@ -1515,7 +1548,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
       </motion.div>
 
       {/* border putih tipis adaptif (hanya terlihat bila latar gelap / hitam;
-          disembunyikan di halaman utama menu karena panelnya transparan) */}
+          disembunyikan saat latar gradien dipakai karena panelnya transparan) */}
       <motion.div
         aria-hidden
         className="pointer-events-none absolute left-1/2 z-[55]"

@@ -9,7 +9,8 @@
  *
  * Salin / Potong tidak langsung menutup island: island mengecil jadi pil dengan tombol
  * Paste yang menggantung sampai ditekan. Ada dua cara menempel (lihat `paste`, `pasteRun`, `pasteBrowse`):
- *   - Paste        -> ke folder Explorer yang sedang dibuka
+ *   - Paste        -> ke folder Explorer yang sedang dibuka; bila tidak ada
+ *                     Explorer yang terbuka, ke Desktop
  *   - ikon folder  -> dialog pilih folder tujuan
  *
  * Rename dan Properti membuka tampilan sendiri di dalam panel (`view`):
@@ -27,6 +28,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Crop } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { desktopDir } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   buildActions,
@@ -173,6 +175,21 @@ function actionAt(pos: { x: number; y: number }): string | null {
   const el = document.elementFromPoint(pos.x / dpr, pos.y / dpr);
 
   return el?.closest<HTMLElement>("[data-action-id]")?.dataset.actionId ?? null;
+}
+
+// Folder tujuan untuk tombol Paste: folder Explorer yang sedang dibuka.
+// Bila tidak ada Explorer yang terbuka (mis. file ada di Desktop), pakai Desktop.
+async function pasteHereFolder(): Promise<string | null> {
+  const explorer = await invoke<string | null>("file_explorer_folder").catch(
+    () => null,
+  );
+  if (explorer) return explorer;
+
+  // Desktop pengguna (ikut terbaca bila Desktop dipindah ke OneDrive)
+  const desktop = await desktopDir().catch(() => null);
+
+  // buang garis miring di ujung path
+  return desktop ? desktop.replace(/[\\/]+$/, "") : null;
 }
 
 interface FileIslandOptions {
@@ -473,8 +490,8 @@ export function useFileIsland({
     [clear],
   );
 
-  // Tempel file. "here" = folder Explorer yang sedang dibuka,
-  // "browse" = pilih folder lewat dialog.
+  // Tempel file. "here" = folder Explorer yang sedang dibuka (atau Desktop bila
+  // tidak ada Explorer yang terbuka), "browse" = pilih folder lewat dialog.
   const startPaste = useCallback(async (where: "here" | "browse") => {
     const cur = pasteRef.current;
     if (!cur) return;
@@ -505,10 +522,8 @@ export function useFileIsland({
             dest: undefined,
             message: undefined,
           });
-          // folder Explorer yang sedang dibuka
-          dest = await invoke<string | null>("file_explorer_folder").catch(
-            () => null,
-          );
+          // folder Explorer yang sedang dibuka, atau Desktop bila tidak ada
+          dest = await pasteHereFolder();
         }
       } catch (e) {
         if (stale()) return;
@@ -519,7 +534,7 @@ export function useFileIsland({
             e,
             where === "browse"
               ? "Gagal membuka dialog"
-              : "Gagal membaca folder Explorer",
+              : "Gagal membaca folder tujuan",
           ),
         });
         return;
@@ -535,7 +550,7 @@ export function useFileIsland({
           setPaste({
             ...cur,
             phase: "error",
-            message: "Tidak ada folder Explorer yang terbuka",
+            message: "Folder tujuan tidak ditemukan, coba ikon folder",
           });
         }
         return;
@@ -572,7 +587,7 @@ export function useFileIsland({
     }
   }, []);
 
-  // Tombol Paste: tempel ke folder Explorer yang sedang dibuka
+  // Tombol Paste: tempel ke folder Explorer yang sedang dibuka (atau Desktop)
   const pasteRun = useCallback(() => startPaste("here"), [startPaste]);
 
   // Tombol ikon folder: pilih folder tujuan lewat dialog
