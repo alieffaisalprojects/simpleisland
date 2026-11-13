@@ -69,6 +69,7 @@ import { useStopwatchRunning } from "./menu/stopwatchStore";
 const BULGE_X = 1.16;
 const BULGE_Y = 1.25;
 const BULGE_MS = 240;
+const BULGE_SNAP_MS = 80; // lama transisi "snap" scaleX/scaleY ke 1 setelah dibatalkan
 const SWALLOW_POP = {
   type: "spring",
   stiffness: 620,
@@ -145,7 +146,9 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const [overIsland, setOverIsland] = useState(false);
   const [cursorBack, setCursorBack] = useState(false); // klik: pointer muncul lagi
   const [bulge, setBulge] = useState(false);
+  const [bulgeSnap, setBulgeSnap] = useState(false); // bulge dibatalkan: scaleX/Y langsung ke 1
   const bulgeTimer = useRef(0);
+  const snapTimer = useRef(0);
 
   //swipe next / prev
   const swipeX = useMotionValue(0);
@@ -226,10 +229,29 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const swallowOn = isMini && !forceMini && !expanded && !menuOpen;
   const swallowed = swallowOn && overIsland && !cursorBack;
 
+  // efek membal yang benar-benar dipakai untuk animasi.
+  // langsung mati begitu pointer ditekan (cursorBack) atau island terbuka
+  // (swallowOn false), tanpa menunggu timer BULGE_MS selesai.
+  const bulgeOn = bulge && swallowOn && !cursorBack;
+
   const popBulge = () => {
     window.clearTimeout(bulgeTimer.current);
     setBulge(true);
     bulgeTimer.current = window.setTimeout(() => setBulge(false), BULGE_MS);
+  };
+
+  // batalkan membal di tengah jalan (klik cepat): sisa lonjakan scaleX/Y
+  // di-snap ke 1 supaya tidak ikut terbawa ke animasi expand / menu
+  const cancelBulge = () => {
+    window.clearTimeout(bulgeTimer.current);
+    if (!bulge) return;
+    setBulge(false);
+    setBulgeSnap(true);
+    window.clearTimeout(snapTimer.current);
+    snapTimer.current = window.setTimeout(
+      () => setBulgeSnap(false),
+      BULGE_SNAP_MS,
+    );
   };
 
   const leaveIsland = () => {
@@ -249,7 +271,13 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     setBulge(false);
   }, [swallowOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => () => window.clearTimeout(bulgeTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(bulgeTimer.current);
+      window.clearTimeout(snapTimer.current);
+    },
+    [],
+  );
 
   // ukuran dari Pengaturan (selisih dari ukuran bawaan, sesuai gaya aktif)
   // compact dan mini punya pengaturan sendiri; expanded tidak ikut diubah
@@ -333,16 +361,22 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     borderBottomRightRadius: bottomRadius,
     // paste tidak mengecil
     scale: getPressScale(pressed && kind !== "paste", expanded),
-    // nyembul saat hover idle
-    scaleX: bulge ? BULGE_X : 1,
-    scaleY: bulge ? BULGE_Y : 1,
+    // nyembul saat hover idle (mati langsung saat diklik / island terbuka)
+    scaleX: bulgeOn ? BULGE_X : 1,
+    scaleY: bulgeOn ? BULGE_Y : 1,
   };
 
-  const spring = bulge
+  const spring = bulgeOn
     ? SWALLOW_POP
     : expanded
       ? SPRING_EXPAND
       : SPRING_COLLAPSE;
+
+  // bulge dibatalkan karena klik cepat: scaleX/Y langsung ke 1 (tanpa spring),
+  // properti lain (width, height, radius) tetap memakai spring normal
+  const transition = bulgeSnap
+    ? { ...spring, scaleX: { duration: 0 }, scaleY: { duration: 0 } }
+    : spring;
 
   // kunci hanya saat lirik expanded
   // terkunci juga selama stopwatch berjalan: klik luar dan blur tidak menutup menu
@@ -1061,7 +1095,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           }}
           initial={false}
           animate={anim}
-          transition={spring}
+          transition={transition}
         >
           {/* bahu notch */}
           <IslandShoulders size={shoulder} />
@@ -1073,7 +1107,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           style={tabFrameStyle}
           initial={false}
           animate={{ width: anim.width, scale: anim.scale }}
-          transition={spring}
+          transition={transition}
         >
           <AnimatePresence>
             {menuTabOn && (
@@ -1119,7 +1153,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         ref={islandRef}
         initial={false}
         animate={anim}
-        transition={spring}
+        transition={transition}
         onClick={() => {
           if (swipeDidDrag.current) {
             swipeDidDrag.current = false;
@@ -1136,6 +1170,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         }}
         onContextMenu={handleContextMenu}
         onPointerDown={(e) => {
+          cancelBulge(); // klik saat masih membal: batalkan agar tidak ikut ke animasi buka
           setPressed(true);
           setCursorBack(true); // klik kiri / kanan: pointer muncul lagi
           swipeStart(e);
@@ -1182,7 +1217,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         style={tabFrameStyle}
         initial={false}
         animate={{ width: anim.width, scale: anim.scale }}
-        transition={spring}
+        transition={transition}
       >
         <AnimatePresence>
           {menuTabOn && (

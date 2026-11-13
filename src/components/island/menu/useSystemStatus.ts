@@ -63,6 +63,27 @@ const EMPTY_RADIOS: RadiosStatus = {
 // ssid yang sesaat kosong (saat scan) ditahan selama ini
 const SSID_HOLD_MS = 12000;
 
+// cache terakhir: menu dibuka lagi langsung tampil lengkap,
+// ikon wifi / bluetooth muncul bareng baterai (tidak menunggu pembacaan native)
+let cachedStatus: SystemStatus | null = null;
+let cachedRadios: RadiosStatus | null = null;
+
+// isi cache lebih awal supaya pembukaan menu pertama juga langsung lengkap
+export function warmSystemStatus() {
+  invoke<SystemStatus>("system_status")
+    .then((s) => {
+      if (!cachedStatus) cachedStatus = s;
+    })
+    .catch(() => {});
+  invoke<RadiosStatus>("system_radios")
+    .then((r) => {
+      if (!cachedRadios) cachedRadios = r;
+    })
+    .catch(() => {});
+}
+
+warmSystemStatus();
+
 // isi sama persis -> tidak perlu update state (hindari render ulang)
 const sameRadios = (a: RadiosStatus, b: RadiosStatus): boolean =>
   a.wifiPresent === b.wifiPresent &&
@@ -74,8 +95,12 @@ const sameRadios = (a: RadiosStatus, b: RadiosStatus): boolean =>
   a.bluetoothConnected.join("\n") === b.bluetoothConnected.join("\n");
 
 export function useSystemStatus() {
-  const [status, setStatus] = useState<SystemStatus>(EMPTY_STATUS);
-  const [radios, setRadios] = useState<RadiosStatus>(EMPTY_RADIOS);
+  const [status, setStatus] = useState<SystemStatus>(
+    () => cachedStatus ?? EMPTY_STATUS,
+  );
+  const [radios, setRadios] = useState<RadiosStatus>(
+    () => cachedRadios ?? EMPTY_RADIOS,
+  );
   const [volume, setVolumeState] = useState<VolumeStatus>(EMPTY_VOLUME);
 
   const alive = useRef(true);
@@ -85,7 +110,18 @@ export function useSystemStatus() {
   const volPending = useRef<number | null>(null);
   const volTouched = useRef(0);
   // ssid terakhir yang terbaca (supaya tidak berkedip kosong saat scan)
-  const lastSsid = useRef<{ ssid: string; at: number } | null>(null);
+  const lastSsid = useRef<{ ssid: string; at: number } | null>(
+    cachedRadios?.ssid ? { ssid: cachedRadios.ssid, at: Date.now() } : null,
+  );
+
+  // simpan nilai terbaru ke cache (nilai kosong bawaan tidak disimpan)
+  useEffect(() => {
+    if (status !== EMPTY_STATUS) cachedStatus = status;
+  }, [status]);
+
+  useEffect(() => {
+    if (radios !== EMPTY_RADIOS) cachedRadios = radios;
+  }, [radios]);
 
   const refreshRadios = useCallback(async () => {
     if (loading.current) return;

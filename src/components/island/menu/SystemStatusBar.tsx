@@ -3,7 +3,7 @@
 // kiri: jam, tengah: hari + tanggal, kanan: bluetooth + wifi + baterai (wifi menempel di kiri baterai)
 // hari + tanggal tepat di tengah saat diam; saat nama wifi / bluetooth melebar,
 // kolom kanan membesar dan hari + tanggal ikut bergeser ke kiri
-// ikon muncul dulu, lalu nama geser keluar ke kiri ikon, lalu menciut (keluar lagi saat hover)
+// ikon langsung tampil, lalu nama geser keluar ke kiri ikon, lalu menciut (keluar lagi saat hover)
 
 import React, { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -117,12 +117,28 @@ const TimeText: React.FC = () => {
   );
 };
 
-// jeda ikon muncul sebelum nama keluar
+// jeda sebelum nama keluar (ikon sudah tampil)
 const INTRO_DELAY_MS = 450;
 // lama nama tampil sebelum menciut
 const INTRO_MS = 2000;
 
-// chip ikon: ikon muncul dulu, lalu nama geser keluar, lalu menciut
+// animasi nama ala iOS: pegas tanpa memantul, memudar + blur tipis
+const LABEL_SPRING = {
+  type: "spring",
+  stiffness: 300,
+  damping: 34,
+  mass: 1,
+} as const;
+// menciut (nama masuk lagi ke ikon): lebih pelan dari saat keluar
+const LABEL_SPRING_OUT = {
+  type: "spring",
+  stiffness: 150,
+  damping: 24.5,
+  mass: 1,
+} as const;
+const LABEL_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+
+// chip ikon: ikon langsung tampil, nama geser keluar lalu menciut
 // nama keluar lagi saat hover
 //
 // - nama ada di KIRI ikon, jadi ikon tidak bergeser saat nama keluar / menciut
@@ -144,7 +160,7 @@ const Chip = React.memo(function Chip({
   const hasLabel = label !== "";
   const open = hasLabel && (intro || hover);
 
-  // urutan saat chip muncul / nama baru tersedia
+  // urutan saat nama tersedia: jeda, tampil, lalu menciut
   useEffect(() => {
     if (!hasLabel) {
       setIntro(false);
@@ -163,7 +179,7 @@ const Chip = React.memo(function Chip({
 
   return (
     <motion.span
-      initial={{ opacity: 0, scale: 0.8 }}
+      initial={false} // ikon langsung tampil, tanpa animasi masuk
       animate={{ opacity: dim ? 0.55 : 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.8 }}
       transition={{ type: "spring", stiffness: 520, damping: 30 }}
@@ -176,13 +192,32 @@ const Chip = React.memo(function Chip({
       {label && (
         <motion.span
           initial={false}
-          animate={{ width: open ? "auto" : 0, opacity: open ? 1 : 0 }}
-          transition={{ duration: 0.26, ease: [0.32, 0.72, 0, 1] }}
+          animate={{
+            width: open ? "auto" : 0,
+            opacity: open ? 1 : 0,
+            filter: open ? "blur(0px)" : "blur(4px)",
+          }}
+          transition={{
+            width: open ? LABEL_SPRING : LABEL_SPRING_OUT,
+            // keluar: teks muncul setelah ruangnya mulai terbuka
+            // menciut: teks memudar pelan sambil ruangnya menutup
+            opacity: open
+              ? { duration: 0.34, delay: 0.05, ease: LABEL_EASE }
+              : { duration: 0.45, ease: "easeInOut" },
+            filter: open
+              ? { duration: 0.34, delay: 0.05, ease: LABEL_EASE }
+              : { duration: 0.45, ease: "easeInOut" },
+          }}
           className="overflow-hidden"
         >
-          <span className="block max-w-[78px] truncate whitespace-nowrap pr-1">
+          <motion.span
+            initial={false}
+            animate={{ x: open ? 0 : 8 }}
+            transition={open ? LABEL_SPRING : LABEL_SPRING_OUT}
+            className="block max-w-[78px] truncate whitespace-nowrap pr-1"
+          >
             {label}
-          </span>
+          </motion.span>
         </motion.span>
       )}
       <img
