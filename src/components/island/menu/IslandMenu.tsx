@@ -107,12 +107,19 @@ const Header: React.FC<{
 
 type TileTone = "sky" | "amber" | "green";
 
-// Warna button wifi, bluetooth
+// Warna button wifi, bluetooth (menyala)
 const TILE_LIT: Record<TileTone, string> = {
   sky: "bg-sky-400/60 hover:bg-sky-400/80",
   amber: "bg-amber-400/30 hover:bg-amber-400/40",
   green: "bg-emerald-400/30 hover:bg-emerald-400/40",
 };
+
+// Latar tombol menu saat tidak menyala: hitam transparan ala menu radial.
+// Panel island di halaman utama menu dibuat transparan (lihat `menuGlass` di
+// DynamicIsland.tsx), jadi setiap tombol berdiri sendiri di atas wallpaper.
+// Ubah angka /60 (transparansi) dan /75 (saat hover) untuk menyesuaikan.
+const TILE_GLASS =
+  "bg-[#050506]/60 ring-1 ring-white/[0.08] hover:bg-[#050506]/75";
 
 interface TileProps {
   name: string;
@@ -160,7 +167,7 @@ const MenuTile: React.FC<TileProps> = ({
       whileTap={{ scale: 0.93 }}
       transition={{ type: "spring", stiffness: 520, damping: 28 }}
       className={`relative flex min-w-0 flex-1 items-center justify-center rounded-[20px] transition-colors ${
-        active ? lit : "bg-white/[0.07] hover:bg-white/[0.13]"
+        active ? lit : TILE_GLASS
       } ${ring}`}
     >
       {/* Ikon menu. */}
@@ -201,11 +208,14 @@ const HomeView: React.FC<{
   return (
     <div className="relative h-full w-full">
       <div className="flex h-full w-full flex-col gap-2 p-[18px]">
-        <SystemStatusBar
-          battery={status.battery}
-          net={status.net}
-          radios={radios}
-        />
+        {/* Status bar tetap hitam solid (panel island di sini transparan) */}
+        <div className="shrink-0 rounded-[18px] bg-[#050506] px-3 py-1">
+          <SystemStatusBar
+            battery={status.battery}
+            net={status.net}
+            radios={radios}
+          />
+        </div>
 
         <div className="flex min-h-0 flex-1 gap-2">
           {apps.map(({ id, name, icon }) => (

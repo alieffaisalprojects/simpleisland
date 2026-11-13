@@ -161,6 +161,19 @@ const EDGE_RGB = "150, 152, 160"; // warna abu-abu (R, G, B); putih murni = "255
 const EDGE_MAX_ALPHA = 0.34; // keterlihatan maksimal border (0..1), naikkan bila ingin lebih tegas
 const EDGE_FADE_S = 0.45; // lama border muncul / menghilang (detik)
 
+// ---- latar pil di halaman utama menu (gaya radial) ----
+// Di atas hitam solid (tempat status bar), makin ke bawah makin transparan.
+// Atur titik-titiknya di GLASS_GRADIENT: angka pertama = alpha (1 solid, 0 transparan),
+// persen = posisi dari atas ke bawah panel. Warna tombol ada di IslandMenu.tsx (TILE_GLASS).
+const GLASS_FADE_S = 0.25; // latar belakang menu
+const GLASS_GRADIENT =
+  "linear-gradient(to bottom, " +
+  "rgba(5, 5, 6, 1) 0%, " +
+  "rgba(5, 5, 6, 1) 28%, " +
+  "rgba(5, 5, 6, 0.80) 50%, " +
+  "rgba(5, 5, 6, 0.6) 75%, " +
+  "rgba(5, 5, 6, 0.20) 100%)";
+
 interface DynamicIslandProps {
   activeWidget: ActiveWidget;
   track: SpotifyTrack;
@@ -238,10 +251,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const swipeX = useMotionValue(0);
   const islandX = useTransform(swipeX, (v) => `calc(-50% + ${v}px)`);
 
-  // latar pil ikut bergeser saat swipe:
-  //  - compact / mini : ikut (supaya latar tidak diam sementara album dan spektrum bergeser)
-  //  - lirik expand   : ikut (konten lirik transparan, jadi latarnya terlihat diam kalau tidak ikut)
-  //  - player expand  : tidak ikut (kontennya sendiri hitam penuh)
+  // latar pil ikut bergeser saat swipe (semua mode musik: compact, lirik, dan
+  // player expanded) supaya latar, konten, dan border bergerak sebagai satu bentuk
   const bgFollow = useRef(false);
   const bgX = useTransform(
     swipeX,
@@ -417,8 +428,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const lyricCompact =
     kind === "music" && lyricsMode && !expanded && !isMini && !forceMini;
 
-  // latar ikut bergeser kecuali di player expanded biasa (lihat bgFollow di atas)
-  bgFollow.current = bgFollow.current = kind === "music" && !forceMini;
+  // latar pil selalu ikut bergeser saat swipe di mode musik (lihat bgFollow di atas)
+  bgFollow.current = kind === "music" && !forceMini;
 
   const lyricBase = SPOTIFY_SIZES.lyricsMini.width + adj.w;
   const lyricExtra = lyricCompact
@@ -475,6 +486,11 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const flush = settings.style !== "pill";
   const shoulder = settings.style === "notch" ? settings.shoulder : 0;
   const islandTop = flush ? 0 : Math.max(0, ISLAND_TOP + settings.pillTop);
+
+  // halaman utama menu: panel island transparan (gaya radial). Hanya tombol
+  // (hitam transparan) dan status bar (hitam solid) yang terlihat di atas wallpaper.
+  // Berlaku di halaman utama saja; sub-halaman dan HUD volume tetap hitam solid.
+  const menuGlass = kind === "menu" && menuView === "home" && !hudMode;
 
   // pil kedua turun
   const secTop = islandTop + (flush ? 6 : 0);
@@ -1347,11 +1363,14 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
       {/* pil + gooey */}
       <div
         className="absolute inset-0"
-        style={{ filter: gooOn ? "url(#gooey-effect)" : undefined }}
+        // filter gooey mengeraskan alpha, jadi dimatikan saat latar gradien dipakai
+        style={{
+          filter: gooOn && !menuGlass ? "url(#gooey-effect)" : undefined,
+        }}
       >
         {/* pil utama */}
         <motion.div
-          className="absolute left-1/2 bg-[#050506]"
+          className="absolute left-1/2"
           style={{
             top: islandTop,
             x: bgX,
@@ -1361,6 +1380,26 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           animate={anim}
           transition={islandTransition}
         >
+          {/* latar hitam solid (semua tampilan kecuali halaman utama menu) */}
+          <motion.div
+            aria-hidden
+            className="absolute inset-0 bg-[#050506]"
+            style={{ borderRadius: "inherit" }}
+            initial={false}
+            animate={{ opacity: menuGlass ? 0 : 1 }}
+            transition={{ duration: GLASS_FADE_S }}
+          />
+
+          {/* latar gradien halaman utama menu: solid di atas, transparan di bawah */}
+          <motion.div
+            aria-hidden
+            className="absolute inset-0"
+            style={{ borderRadius: "inherit", background: GLASS_GRADIENT }}
+            initial={false}
+            animate={{ opacity: menuGlass ? 1 : 0 }}
+            transition={{ duration: GLASS_FADE_S }}
+          />
+
           {/* bahu notch */}
           <IslandShoulders size={shoulder} />
         </motion.div>
@@ -1475,13 +1514,14 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         </AnimatePresence>
       </motion.div>
 
-      {/* border putih tipis adaptif (hanya terlihat bila latar gelap / hitam) */}
+      {/* border putih tipis adaptif (hanya terlihat bila latar gelap / hitam;
+          disembunyikan di halaman utama menu karena panelnya transparan) */}
       <motion.div
         aria-hidden
         className="pointer-events-none absolute left-1/2 z-[55]"
         style={edgeStyle}
         initial={false}
-        animate={anim}
+        animate={{ ...anim, opacity: menuGlass ? 0 : 1 }}
         transition={islandTransition}
       />
 
