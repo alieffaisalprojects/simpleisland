@@ -17,7 +17,13 @@ import {
   LyricsState,
   SpotifyTrack,
 } from "../../types";
-import { MorphLayer, SpotifyWidget } from "./SpotifyWidget";
+import {
+  COLLAPSE_CONTENT_DELAY,
+  LYRIC_WIDEN_SPRING,
+  MorphLayer,
+  SPOTIFY_SIZES,
+  SpotifyWidget,
+} from "./SpotifyWidget";
 import { TimerCompact, TimerExpanded, TimerPill } from "./ClockTimerView";
 import { SystemWidget } from "../modules/SystemWidget";
 import { FileActionsPanel, getFilePanelSize } from "./file/FileActionsPanel";
@@ -69,13 +75,64 @@ import { useStopwatchRunning } from "./menu/stopwatchStore";
 const BULGE_X = 1.16;
 const BULGE_Y = 1.25;
 const BULGE_MS = 240;
-const BULGE_SNAP_MS = 80; // lama transisi "snap" scaleX/scaleY ke 1 setelah dibatalkan
 const SWALLOW_POP = {
   type: "spring",
   stiffness: 620,
   damping: 15,
   mass: 0.7,
 } as const;
+
+// ---- expand -> compact (ala iOS Dynamic Island) ----
+// Dua fase supaya terasa hidup:
+//  1. squeeze : pil menciut LEBIH sempit dari ukuran compact dan sedikit
+//               "nyembul" (lebih tinggi, dan terangkat ke atas pada gaya pill)
+//  2. release : pil dilepas, melebar kembali ke ukuran compact dengan
+//               sedikit pantulan, tinggi turun halus
+// Atur rasa animasi lewat konstanta di bawah ini.
+
+type CollapsePhase = "none" | "squeeze" | "release";
+
+const COLLAPSE_SQUEEZE_MS = 100; // lama fase squeeze sebelum melebar (ms)
+const COLLAPSE_RELEASE_MS = 500; // lama fase release sampai selesai (ms)
+const COLLAPSE_NARROW = 22; // seberapa sempit dari lebar compact (px)
+const COLLAPSE_POP_H = 11; // seberapa nyembul / tambahan tinggi (px)
+const COLLAPSE_LIFT = 3; // pil (melayang) terangkat ke atas (px)
+const COLLAPSE_WINDOW_DELAY = 1000; // window baru dikecilkan setelah animasi (ms)
+
+// Fase squeeze: pelan dan halus (hampir tanpa pantulan)
+const COLLAPSE_SQUEEZE_SPRING = {
+  type: "spring",
+  stiffness: 250,
+  damping: 28,
+  mass: 1,
+} as const;
+
+// Fase release: lebar melebar dengan sedikit pantulan (terasa hidup)
+const COLLAPSE_RELEASE_WIDTH = {
+  type: "spring",
+  stiffness: 190,
+  damping: 14,
+  mass: 0.95,
+} as const;
+
+// Fase release: tinggi dan posisi turun dengan pantulan sangat tipis
+const COLLAPSE_RELEASE_HEIGHT = {
+  type: "spring",
+  stiffness: 220,
+  damping: 18,
+  mass: 0.9,
+} as const;
+
+// Properti lain (radius, scale) saat release: halus tanpa pantulan
+const COLLAPSE_SETTLE = {
+  type: "spring",
+  stiffness: 260,
+  damping: 2 * Math.sqrt(260),
+  mass: 1,
+} as const;
+
+//lirik compact melebar saat baris panjang
+const LYRIC_MAX_WIDTH = 420; // lebar maksimal pil (window 600)
 
 //swipe kiri / kanan: next / prev
 const SWIPE_START = 8; // jarak awal dianggap drag (px)
@@ -125,6 +182,9 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const [revealing, setRevealing] = useState(false);
   const [locked, setLocked] = useState(false); // kunci
 
+  // fase animasi menutup (expand -> compact)
+  const [collapsePhase, setCollapsePhase] = useState<CollapsePhase>("none");
+
   // pilihan aktivitas
   const [pick, setPick] = useState<IslandPick>(
     activeWidget === "timer" ? "timer" : "music",
@@ -146,15 +206,22 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const [overIsland, setOverIsland] = useState(false);
   const [cursorBack, setCursorBack] = useState(false); // klik: pointer muncul lagi
   const [bulge, setBulge] = useState(false);
-  const [bulgeSnap, setBulgeSnap] = useState(false); // bulge dibatalkan: scaleX/Y langsung ke 1
   const bulgeTimer = useRef(0);
-  const snapTimer = useRef(0);
+
+  //lebar yang dibutuhkan baris lirik compact
+  const [lyricNeed, setLyricNeed] = useState(0);
 
   //swipe next / prev
   const swipeX = useMotionValue(0);
-  // dipakai bersama oleh background pil, konten, dan tab kembali,
-  // supaya semuanya bergeser serempak (termasuk saat mini)
   const islandX = useTransform(swipeX, (v) => `calc(-50% + ${v}px)`);
+
+  // latar pil ikut bergeser saat swipe, hanya di lirik expand
+  // (konten lirik transparan, jadi latarnya terlihat diam kalau tidak ikut)
+  const bgFollow = useRef(false);
+  const bgX = useTransform(
+    swipeX,
+    (v) => `calc(-50% + ${bgFollow.current ? v : 0}px)`,
+  );
   const swipe = useRef<{
     id: number;
     x: number;
@@ -229,29 +296,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   const swallowOn = isMini && !forceMini && !expanded && !menuOpen;
   const swallowed = swallowOn && overIsland && !cursorBack;
 
-  // efek membal yang benar-benar dipakai untuk animasi.
-  // langsung mati begitu pointer ditekan (cursorBack) atau island terbuka
-  // (swallowOn false), tanpa menunggu timer BULGE_MS selesai.
-  const bulgeOn = bulge && swallowOn && !cursorBack;
-
   const popBulge = () => {
     window.clearTimeout(bulgeTimer.current);
     setBulge(true);
     bulgeTimer.current = window.setTimeout(() => setBulge(false), BULGE_MS);
-  };
-
-  // batalkan membal di tengah jalan (klik cepat): sisa lonjakan scaleX/Y
-  // di-snap ke 1 supaya tidak ikut terbawa ke animasi expand / menu
-  const cancelBulge = () => {
-    window.clearTimeout(bulgeTimer.current);
-    if (!bulge) return;
-    setBulge(false);
-    setBulgeSnap(true);
-    window.clearTimeout(snapTimer.current);
-    snapTimer.current = window.setTimeout(
-      () => setBulgeSnap(false),
-      BULGE_SNAP_MS,
-    );
   };
 
   const leaveIsland = () => {
@@ -271,21 +319,28 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     setBulge(false);
   }, [swallowOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(
-    () => () => {
-      window.clearTimeout(bulgeTimer.current);
-      window.clearTimeout(snapTimer.current);
-    },
-    [],
-  );
+  useEffect(() => () => window.clearTimeout(bulgeTimer.current), []);
 
   // ukuran dari Pengaturan (selisih dari ukuran bawaan, sesuai gaya aktif)
   // compact dan mini punya pengaturan sendiri; expanded tidak ikut diubah
   const adj = sizeOf(settings, settings.style, isMini ? "mini" : "compact");
   const compactH = Math.max(20, COMPACT_HEIGHT + adj.h);
+
+  // lirik compact: pil melebar bila baris lirik panjang
+  const lyricCompact =
+    kind === "music" && lyricsMode && !expanded && !isMini && !forceMini;
+  bgFollow.current = expanded && kind === "music" && lyricsMode && !forceMini;
+  const lyricBase = SPOTIFY_SIZES.lyricsMini.width + adj.w;
+  const lyricExtra = lyricCompact
+    ? Math.min(
+        Math.max(0, lyricNeed - lyricBase),
+        Math.max(0, LYRIC_MAX_WIDTH - lyricBase),
+      )
+    : 0;
+
   const compactWidth = Math.max(
     36,
-    getCompactWidth(kind, isMini, lyricsMode) + adj.w,
+    getCompactWidth(kind, isMini, lyricsMode) + adj.w + lyricExtra,
   );
   const collapsedHeight = Math.max(
     20,
@@ -351,9 +406,71 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   const topRadius = flush ? 0 : bottomRadius;
 
+  // ---- fase menutup: expand -> compact ----
+
+  // ref ini juga dipakai efek tinggi window di bawah
+  const prevExpanded = useRef(expanded);
+
+  // hover idle (pil nyembul + pointer tertelan) punya animasinya sendiri,
+  // jadi fase squeeze / release tidak dipakai saat itu
+  const hoverIdle = swallowOn && overIsland && !cursorBack;
+  const suppressCollapse = bulge || hoverIdle;
+
+  // render pertama setelah expanded berubah true -> false (efek fase belum jalan)
+  const collapsingNow = prevExpanded.current && !expanded && !suppressCollapse;
+
+  const squeezeOn =
+    !expanded &&
+    !suppressCollapse &&
+    (collapsePhase === "squeeze" || collapsingNow);
+  const releaseOn =
+    !expanded && !suppressCollapse && collapsePhase === "release";
+  const collapseActive = squeezeOn || releaseOn;
+
+  // jalankan fase: squeeze -> release -> selesai
+  const phaseExpandedRef = useRef(expanded);
+  useEffect(() => {
+    const was = phaseExpandedRef.current;
+    phaseExpandedRef.current = expanded;
+
+    // dibuka lagi di tengah animasi: batalkan semuanya
+    if (expanded) {
+      setCollapsePhase("none");
+      return;
+    }
+    if (!was) return;
+
+    setCollapsePhase("squeeze");
+    const toRelease = window.setTimeout(
+      () => setCollapsePhase("release"),
+      COLLAPSE_SQUEEZE_MS,
+    );
+    const toDone = window.setTimeout(
+      () => setCollapsePhase("none"),
+      COLLAPSE_SQUEEZE_MS + COLLAPSE_RELEASE_MS,
+    );
+
+    return () => {
+      window.clearTimeout(toRelease);
+      window.clearTimeout(toDone);
+    };
+  }, [expanded]);
+
+  // jeda konten compact (album, spektrum, timer) setelah island menutup:
+  // muncul saat pil mulai melebar kembali
+  const contentDelay = collapseActive ? COLLAPSE_CONTENT_DELAY : undefined;
+
   const anim = {
-    width: expanded ? expandedWidth : compactWidth,
-    height: expanded ? expandedHeight : collapsedHeight,
+    // squeeze: lebih sempit dari compact, lalu release melebar ke compactWidth
+    width: expanded
+      ? expandedWidth
+      : Math.max(30, compactWidth - (squeezeOn ? COLLAPSE_NARROW : 0)),
+    // squeeze: sedikit lebih tinggi (nyembul), lalu release turun ke tinggi compact
+    height: expanded
+      ? expandedHeight
+      : collapsedHeight + (squeezeOn ? COLLAPSE_POP_H : 0),
+    // pada gaya pill (melayang), nyembulnya juga terangkat ke atas
+    y: squeezeOn && !flush ? -COLLAPSE_LIFT : 0,
     // 4 sudut
     borderTopLeftRadius: topRadius,
     borderTopRightRadius: topRadius,
@@ -361,22 +478,16 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     borderBottomRightRadius: bottomRadius,
     // paste tidak mengecil
     scale: getPressScale(pressed && kind !== "paste", expanded),
-    // nyembul saat hover idle (mati langsung saat diklik / island terbuka)
-    scaleX: bulgeOn ? BULGE_X : 1,
-    scaleY: bulgeOn ? BULGE_Y : 1,
+    // nyembul saat hover idle
+    scaleX: bulge ? BULGE_X : 1,
+    scaleY: bulge ? BULGE_Y : 1,
   };
 
-  const spring = bulgeOn
+  const spring = bulge
     ? SWALLOW_POP
     : expanded
       ? SPRING_EXPAND
       : SPRING_COLLAPSE;
-
-  // bulge dibatalkan karena klik cepat: scaleX/Y langsung ke 1 (tanpa spring),
-  // properti lain (width, height, radius) tetap memakai spring normal
-  const transition = bulgeSnap
-    ? { ...spring, scaleX: { duration: 0 }, scaleY: { duration: 0 } }
-    : spring;
 
   // kunci hanya saat lirik expanded
   // terkunci juga selama stopwatch berjalan: klik luar dan blur tidak menutup menu
@@ -402,7 +513,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
     onSelectWidget(secondary === "timer" ? "timer" : "spotify");
   };
 
-  // ---- swipe next / prev (musik, compact, mini, dan expanded) ----
+  // ---- swipe next / prev (musik, compact dan expanded) ----
 
   const swipeStart = (e: React.PointerEvent<HTMLDivElement>) => {
     swipeDidDrag.current = false;
@@ -496,7 +607,27 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
   // ---- Window Tauri ----
 
-  const prevExpanded = useRef(expanded);
+  // Menutup (expand -> compact):
+  //  - squeeze : semua properti pakai pegas pelan yang halus
+  //  - release : lebar melebar dengan sedikit pantulan, tinggi turun halus
+  const mainSpring = squeezeOn
+    ? COLLAPSE_SQUEEZE_SPRING
+    : releaseOn
+      ? {
+          ...COLLAPSE_SETTLE,
+          width: COLLAPSE_RELEASE_WIDTH,
+          height: COLLAPSE_RELEASE_HEIGHT,
+          y: COLLAPSE_RELEASE_HEIGHT,
+        }
+      : spring;
+
+  // pelebaran lirik pakai pegas sendiri; buka / tutup island pakai pegas di atas
+  // dipakai latar pil dan konten supaya selalu sinkron
+  // (saat menutup, pegas squeeze / release tidak boleh ditimpa)
+  const islandTransition =
+    lyricCompact && !collapseActive && prevExpanded.current === expanded
+      ? { ...mainSpring, width: LYRIC_WIDEN_SPRING }
+      : mainSpring;
   const appliedHeight = useRef(0); // tinggi window yang terakhir diterapkan
 
   // selisih tinggi terbesar antara compact dan mini (untuk tinggi window)
@@ -507,8 +638,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // tinggi window
   useEffect(() => {
     // tambahan tinggi window saat pil diturunkan / dipertinggi
+    // (+ ruang untuk pil yang nyembul saat menutup)
     const extra =
-      Math.max(0, islandTop - ISLAND_TOP) + (expanded ? 0 : windowAdjH);
+      Math.max(0, islandTop - ISLAND_TOP) +
+      (expanded ? 0 : windowAdjH + COLLAPSE_POP_H);
 
     const targetHeight =
       (expanded ? expandedHeight + 24 : COMPACT_WINDOW_HEIGHT) + extra;
@@ -528,7 +661,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
 
     // kecilkan setelah animasi
     if (collapsing || shrinking) {
-      const timer = window.setTimeout(apply, 460);
+      const timer = window.setTimeout(apply, COLLAPSE_WINDOW_DELAY);
       return () => window.clearTimeout(timer);
     }
 
@@ -794,11 +927,10 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
   // (tab hanya tampil pada gaya notch / tab, jadi island selalu menempel di atas)
   const tabTop = Math.max(TAB_TOP, shoulder + 6);
 
-  // x ikut islandX supaya tab ikut bergeser saat swipe
   const tabFrameStyle: MotionStyle = {
     top: islandTop,
     height: 0,
-    x: islandX,
+    x: "-50%",
     transformOrigin: "top center",
   };
 
@@ -839,6 +971,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         variant="compact"
         width={compactWidth}
         height={compactH}
+        delay={contentDelay}
       >
         <TimerCompact clock={clockTimer} />
       </MorphLayer>
@@ -883,6 +1016,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         variant="compact"
         width={compactWidth}
         height={compactH}
+        delay={contentDelay}
       >
         <div className="flex h-full w-full items-center gap-2 px-[6px] pr-3 text-white">
           <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] bg-white/10">
@@ -973,6 +1107,8 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
             onVolumePress={openVolumeHud}
             widthAdjust={adj.w}
             heightAdjust={adj.h}
+            extraWidth={lyricExtra}
+            onLyricNeedWidth={setLyricNeed}
           />
         </motion.div>
       );
@@ -1083,19 +1219,17 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         className="absolute inset-0"
         style={{ filter: gooOn ? "url(#gooey-effect)" : undefined }}
       >
-        {/* pil utama (background hitam) */}
-        {/* x memakai islandX (bukan "-50%" tetap) supaya background ikut
-            bergeser bersama konten saat swipe, termasuk di mode mini */}
+        {/* pil utama */}
         <motion.div
           className="absolute left-1/2 bg-[#050506]"
           style={{
             top: islandTop,
-            x: islandX,
+            x: bgX,
             transformOrigin: "top center",
           }}
           initial={false}
           animate={anim}
-          transition={transition}
+          transition={islandTransition}
         >
           {/* bahu notch */}
           <IslandShoulders size={shoulder} />
@@ -1107,7 +1241,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
           style={tabFrameStyle}
           initial={false}
           animate={{ width: anim.width, scale: anim.scale }}
-          transition={transition}
+          transition={spring}
         >
           <AnimatePresence>
             {menuTabOn && (
@@ -1153,7 +1287,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         ref={islandRef}
         initial={false}
         animate={anim}
-        transition={transition}
+        transition={islandTransition}
         onClick={() => {
           if (swipeDidDrag.current) {
             swipeDidDrag.current = false;
@@ -1170,7 +1304,6 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         }}
         onContextMenu={handleContextMenu}
         onPointerDown={(e) => {
-          cancelBulge(); // klik saat masih membal: batalkan agar tidak ikut ke animasi buka
           setPressed(true);
           setCursorBack(true); // klik kiri / kanan: pointer muncul lagi
           swipeStart(e);
@@ -1217,7 +1350,7 @@ export const DynamicIsland: React.FC<DynamicIslandProps> = ({
         style={tabFrameStyle}
         initial={false}
         animate={{ width: anim.width, scale: anim.scale }}
-        transition={transition}
+        transition={spring}
       >
         <AnimatePresence>
           {menuTabOn && (

@@ -35,6 +35,12 @@ interface SpotifyWidgetProps {
   widthAdjust?: number;
   heightAdjust?: number;
 
+  // Tambahan lebar pil lirik compact saat baris lirik panjang (px)
+  extraWidth?: number;
+
+  // Melaporkan lebar yang dibutuhkan baris lirik aktif (px, 0 = tidak perlu)
+  onLyricNeedWidth?: (px: number) => void;
+
   // Data lirik
   lyrics: LyricsState;
 
@@ -66,13 +72,27 @@ export const SPOTIFY_SIZES = {
 // Kurva animasi morphing
 const MORPH_EASE: [number, number, number, number] = [0.32, 0.72, 0, 1];
 
+// Pegas pelebaran pil lirik compact (dipakai island dan isinya agar sinkron)
+export const LYRIC_WIDEN_SPRING = {
+  type: "spring",
+  stiffness: 230,
+  damping: 24,
+  mass: 0.9,
+} as const;
+
+// Jeda album dan spektrum compact setelah island menutup dari expand (detik):
+// menunggu pil selesai menciut, baru muncul saat pil melebar kembali
+export const COLLAPSE_CONTENT_DELAY = 0.34;
+
 // Layer konten Dynamic Island
 export const MorphLayer: React.FC<{
   variant: "compact" | "expanded";
   width: number;
   height: number;
   children: React.ReactNode;
-}> = ({ variant, width, height, children }) => {
+  // Jeda sebelum konten muncul (detik); bawaan: 0.07 expanded, 0.1 compact
+  delay?: number;
+}> = ({ variant, width, height, children, delay }) => {
   // Mengecek apakah layer sedang expanded
   const isExpandedLayer = variant === "expanded";
 
@@ -94,10 +114,12 @@ export const MorphLayer: React.FC<{
           opacity: 1,
           scale: 1,
           filter: "blur(0px)",
+          width, // berubah halus saat lebar pil berubah (lirik panjang)
           transition: {
             duration: isExpandedLayer ? 0.3 : 0.22,
-            delay: isExpandedLayer ? 0.07 : 0.1,
+            delay: delay ?? (isExpandedLayer ? 0.07 : 0.1),
             ease: MORPH_EASE,
+            width: LYRIC_WIDEN_SPRING,
           },
         }}
         exit={{
@@ -1103,6 +1125,21 @@ const ExpandedView: React.FC<{
   // Posisi lagu realtime
   const { trackRef, getPosition } = useLivePosition(track);
 
+  // Status tombol play/pause bertahan sebentar setelah diklik, supaya ikon
+  // tidak berkedip bolak-balik saat data dari backend belum sinkron
+  const [forcedPlaying, setForcedPlaying] = useState<boolean | null>(null);
+  const forcedTimer = useRef(0);
+  const playing = forcedPlaying ?? track.isPlaying;
+
+  const handleTogglePlay = () => {
+    setForcedPlaying(!playing);
+    window.clearTimeout(forcedTimer.current);
+    forcedTimer.current = window.setTimeout(() => setForcedPlaying(null), 900);
+    runCommand("media_toggle_play");
+  };
+
+  useEffect(() => () => window.clearTimeout(forcedTimer.current), []);
+
   // Lompat maju / mundur beberapa detik (dipakai saat yang diputar adalah video)
   const lastSkip = useRef<{ at: number; target: number } | null>(null);
 
@@ -1492,22 +1529,23 @@ const ExpandedView: React.FC<{
 
           {/* Tombol play dan pause */}
           <button
-            aria-label={track.isPlaying ? "Pause" : "Play"}
+            aria-label={playing ? "Pause" : "Play"}
             onClick={(e) => {
               e.stopPropagation();
-              runCommand("media_toggle_play");
+              handleTogglePlay();
             }}
             onMouseDown={(e) => e.preventDefault()}
             className={`${buttonBase} h-9 w-9`}
           >
-            {track.isPlaying ? (
+            {playing ? (
               <Pause size={31} fill="currentColor" strokeWidth={1.4} />
             ) : (
+              // geser optik pakai transform (bukan margin) supaya tata letak tidak berubah
               <Play
                 size={30}
                 fill="currentColor"
                 strokeWidth={1.4}
-                className="ml-1"
+                style={{ transform: "translateX(2px)" }}
               />
             )}
           </button>
@@ -1580,12 +1618,16 @@ const viewVariants = {
 };
 
 // Tampilan lirik pada mode mini
+// Lebar di luar teks lirik: padding, album, jarak, spektrum, dan margin pudar
+const LYRIC_MINI_CHROME = 116;
+
 const LyricMiniView: React.FC<{
   track: SpotifyTrack;
   palette: string[];
   lyrics: LyricsState;
   index: number;
-}> = ({ track, palette, lyrics, index }) => {
+  onNeedWidth?: (px: number) => void;
+}> = ({ track, palette, lyrics, index, onNeedWidth }) => {
   // Menentukan teks lirik yang ditampilkan
   const text =
     lyrics.status === "ready"
@@ -1596,8 +1638,31 @@ const LyricMiniView: React.FC<{
         ? "Memuat lirik…"
         : track.title;
 
+  // Ukur lebar baris lirik, lalu laporkan agar pil bisa melebar
+  const measureRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const textWidth = measureRef.current?.offsetWidth ?? 0;
+
+    // Hanya baris lirik asli yang melebarkan pil
+    onNeedWidth?.(
+      lyrics.status === "ready" && textWidth > 0
+        ? Math.ceil(textWidth) + LYRIC_MINI_CHROME
+        : 0,
+    );
+  }, [text, lyrics.status, onNeedWidth]);
+
   return (
-    <div className="flex h-full w-full items-center gap-2 px-[8px] text-white">
+    <div className="relative flex h-full w-full items-center gap-2 overflow-hidden px-[8px] text-white">
+      {/* Pengukur lebar teks (tidak terlihat) */}
+      <span
+        ref={measureRef}
+        aria-hidden
+        className="pointer-events-none invisible absolute left-0 top-0 whitespace-nowrap text-[12.5px] font-semibold tracking-[-0.01em]"
+      >
+        {text}
+      </span>
+
       {/* Kontainer album */}
       <div className="flex h-[26px] w-[26px] shrink-0 items-center justify-center overflow-hidden rounded-[8px] bg-white/10">
         {track.albumArt ? (
@@ -1712,6 +1777,8 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
   isMini = false,
   widthAdjust = 0,
   heightAdjust = 0,
+  extraWidth = 0,
+  onLyricNeedWidth,
   lyrics,
   lyricsMode = false,
   onLyricsModeChange,
@@ -1784,6 +1851,14 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
     [onSeek],
   );
 
+  // Island baru menutup dari expand: konten compact menunggu pil selesai menciut
+  const wasExpanded = useRef(isExpanded);
+  const collapsing = wasExpanded.current && !isExpanded;
+
+  useEffect(() => {
+    wasExpanded.current = isExpanded;
+  });
+
   // Arah animasi perpindahan tampilan
   const dir = lyricsMode ? 1 : -1;
 
@@ -1793,7 +1868,7 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
     : SPOTIFY_SIZES.compact;
 
   const miniSize = {
-    width: baseSize.width + widthAdjust,
+    width: baseSize.width + widthAdjust + (lyricsMode ? extraWidth : 0),
     height: baseSize.height + heightAdjust,
   };
 
@@ -1889,6 +1964,7 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
             variant="compact"
             width={miniSize.width}
             height={miniSize.height}
+            delay={collapsing ? COLLAPSE_CONTENT_DELAY : undefined}
           >
             {lyricsMode ? (
               // Tampilan lirik dalam pil mini
@@ -1897,6 +1973,7 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
                 palette={palette}
                 lyrics={lyrics}
                 index={activeIndex}
+                onNeedWidth={onLyricNeedWidth}
               />
             ) : (
               // Tampilan musik dalam pil mini
