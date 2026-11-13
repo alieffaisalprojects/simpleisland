@@ -410,10 +410,13 @@ struct MediaInfo {
 
 // Dikirim ke frontend lewat event "media-source-update".
 // kind = "music" -> tombol next/prev lagu; kind = "video" -> tombol maju/mundur detik.
+// site = "youtube" -> video YouTube biasa (bukan YouTube Music), dipakai agar klik
+// nama artis membuka channel. Kosong -> situs tidak dikenali.
 #[derive(Clone, serde::Serialize)]
 struct MediaSourceInfo {
     kind: &'static str,
     app: String,
+    site: &'static str,
 }
 
 // Aplikasi yang pasti hanya memutar musik (dicocokkan dengan AppUserModelId, huruf kecil).
@@ -479,7 +482,8 @@ fn looks_like_hash_id(id: &str) -> bool {
     id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-// Petunjuk dari judul window browser: "... - YouTube Music" -> musik, "... - YouTube" -> video.
+// Petunjuk dari judul window browser:
+// "... - YouTube Music" -> musik, "... - YouTube" -> video (dan situs = youtube).
 #[cfg(windows)]
 mod source_hint {
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
@@ -522,6 +526,14 @@ mod source_hint {
         "crunchyroll",
     ];
 
+    // Hasil pemeriksaan judul window.
+    pub struct Hint {
+        // Some(true) = musik, Some(false) = video, None = tidak bisa dipastikan.
+        pub music: Option<bool>,
+        // true = ada window YouTube biasa (bukan YouTube Music) dengan judul media ini.
+        pub youtube: bool,
+    }
+
     struct Search {
         needle: String,
         hits: Vec<String>,
@@ -551,12 +563,17 @@ mod source_hint {
         TRUE
     }
 
-    // Some(true) = musik, Some(false) = video, None = tidak bisa dipastikan.
-    pub fn title_hint(media_title: &str) -> Option<bool> {
+    // Periksa judul window yang memuat judul media dan simpulkan jenis serta situsnya.
+    pub fn inspect(media_title: &str) -> Hint {
+        let none = Hint {
+            music: None,
+            youtube: false,
+        };
+
         let needle = media_title.trim().to_lowercase();
 
         if needle.chars().count() < 3 {
-            return None;
+            return none;
         }
 
         let mut search = Search {
@@ -568,43 +585,50 @@ mod source_hint {
             EnumWindows(Some(enum_cb), LPARAM(&mut search as *mut Search as isize))
         };
 
+        // YouTube biasa: judul window memuat "youtube" tetapi bukan "youtube music".
+        let youtube = search
+            .hits
+            .iter()
+            .any(|t| t.contains("youtube") && !t.contains("youtube music"));
+
         // Situs musik diperiksa lebih dulu karena "YouTube Music" juga memuat kata "YouTube".
-        if search
+        let music = if search
             .hits
             .iter()
             .any(|t| MUSIC_SITES.iter().any(|k| t.contains(k)))
         {
-            return Some(true);
-        }
-
-        if search
+            Some(true)
+        } else if search
             .hits
             .iter()
             .any(|t| VIDEO_SITES.iter().any(|k| t.contains(k)))
         {
-            return Some(false);
-        }
+            Some(false)
+        } else {
+            None
+        };
 
-        None
+        Hint { music, youtube }
     }
 }
 
-// Tentukan apakah yang sedang diputar musik atau video.
+// Tentukan apakah yang sedang diputar musik atau video, dan situs asalnya.
+// Mengembalikan (kind, site): kind = "music" | "video", site = "youtube" | "".
 #[cfg(windows)]
-fn classify_source(app: &str, album: &str, title: &str) -> &'static str {
+fn classify_source(app: &str, album: &str, title: &str) -> (&'static str, &'static str) {
     let id = app.to_lowercase();
 
     // Tidak ada sesi media: biarkan tampilan musik seperti biasa.
     if id.is_empty() {
-        return "music";
+        return ("music", "");
     }
 
     if MUSIC_APPS.iter().any(|k| id.contains(k)) {
-        return "music";
+        return ("music", "");
     }
 
     if VIDEO_APPS.iter().any(|k| id.contains(k)) {
-        return "video";
+        return ("video", "");
     }
 
     let is_browser = BROWSER_APPS.iter().any(|k| id.contains(k)) || looks_like_hash_id(&id);
@@ -612,18 +636,26 @@ fn classify_source(app: &str, album: &str, title: &str) -> &'static str {
 
     // Browser atau aplikasi tak dikenal: cek judul window (tab yang sedang terbuka).
     if !is_mixed {
-        if let Some(is_music) = source_hint::title_hint(title) {
-            return if is_music { "music" } else { "video" };
+        let hint = source_hint::inspect(title);
+
+        if let Some(is_music) = hint.music {
+            // Situs YouTube hanya dilaporkan untuk video (bukan YouTube Music).
+            let site = if hint.youtube && !is_music { "youtube" } else { "" };
+
+            return (if is_music { "music" } else { "video" }, site);
         }
     }
 
     // Tanpa petunjuk lain: lagu biasanya punya info album, video biasanya tidak.
     if is_browser || is_mixed {
-        return if album.trim().is_empty() { "video" } else { "music" };
+        return (
+            if album.trim().is_empty() { "video" } else { "music" },
+            "",
+        );
     }
 
     // Aplikasi tak dikenal: tetap anggap musik (perilaku lama).
-    "music"
+    ("music", "")
 }
 
 // Ambil sesi media aktif Windows.
@@ -801,8 +833,9 @@ async fn start_media_listener(app: AppHandle) {
                 }
             }
 
-            // Musik atau video? Dihitung sebelum `title` dipindahkan ke MediaInfo.
-            let source_kind = classify_source(&source_app, &album_title, &title);
+            // Musik atau video, dan situsnya? Dihitung sebelum `title` dipindahkan ke MediaInfo.
+            let (source_kind, source_site) =
+                classify_source(&source_app, &album_title, &title);
 
             let _ = app.emit(
                 "spotify-status-update",
@@ -830,6 +863,7 @@ async fn start_media_listener(app: AppHandle) {
                 MediaSourceInfo {
                     kind: source_kind,
                     app: source_app,
+                    site: source_site,
                 },
             );
 
@@ -1129,7 +1163,6 @@ mod hit_test {
                 }
             }
         });
-        
     }
 }
 
@@ -1853,7 +1886,7 @@ pub fn run() {
                         hit_test::start(window.clone(), raw);
 
                         // Ukur gelap / terangnya latar untuk border adaptif.
-backdrop::start(raw, app.handle().clone());
+                        backdrop::start(raw, app.handle().clone());
 
                         // Aktifkan penghindar title bar.
                         caption_avoid::start(raw, app.handle().clone());

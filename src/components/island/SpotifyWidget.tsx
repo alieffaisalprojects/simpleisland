@@ -17,6 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LyricsState, SpotifyTrack } from "../../types";
 import { LyricsIcon, LyricsView } from "./LyricsView";
+import { MarqueeText } from "./MarqueeText";
 import { useActiveLine } from "../../hooks/useLyrics";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -825,16 +826,27 @@ export const VIDEO_SKIP_SECONDS = 10;
 
 type MediaSourceKind = "music" | "video";
 
+// Situs asal media (diketahui dari judul window browser di sisi Rust).
+// "youtube" = video YouTube biasa (BUKAN YouTube Music). Kosong = tidak dikenali.
+type MediaSourceSite = "youtube" | "";
+
 // Payload event "media-source-update" dari Rust
 interface MediaSourcePayload {
   kind: MediaSourceKind;
   app: string;
+  site?: string;
+}
+
+// Status sumber media yang sedang aktif
+interface MediaSourceState {
+  kind: MediaSourceKind;
+  site: MediaSourceSite;
 }
 
 const mediaSourceStore = {
-  kind: "music" as MediaSourceKind,
+  state: { kind: "music", site: "" } as MediaSourceState,
   listening: false,
-  subscribers: new Set<(kind: MediaSourceKind) => void>(),
+  subscribers: new Set<(state: MediaSourceState) => void>(),
 };
 
 // Pendengar event dipasang sekali saja dan tidak dilepas
@@ -848,10 +860,15 @@ function ensureMediaSourceListener() {
     // Tidak ada sesi media: pertahankan jenis terakhir supaya tombol tidak berkedip
     if (!payload || !payload.app) return;
 
-    const next: MediaSourceKind = payload.kind === "video" ? "video" : "music";
-    if (next === mediaSourceStore.kind) return;
+    const next: MediaSourceState = {
+      kind: payload.kind === "video" ? "video" : "music",
+      site: payload.site === "youtube" ? "youtube" : "",
+    };
 
-    mediaSourceStore.kind = next;
+    const current = mediaSourceStore.state;
+    if (next.kind === current.kind && next.site === current.site) return;
+
+    mediaSourceStore.state = next;
     mediaSourceStore.subscribers.forEach((notify) => notify(next));
   }).catch((error) => {
     mediaSourceStore.listening = false;
@@ -859,22 +876,31 @@ function ensureMediaSourceListener() {
   });
 }
 
-// Jenis media yang sedang diputar. Tanpa backend baru, hasilnya tetap "music"
-function useMediaSourceKind(): MediaSourceKind {
-  const [kind, setKind] = useState<MediaSourceKind>(mediaSourceStore.kind);
+// Jenis dan situs media yang sedang diputar.
+// Tanpa backend baru, hasilnya tetap { kind: "music", site: "" }
+function useMediaSource(): MediaSourceState {
+  const [state, setState] = useState<MediaSourceState>(mediaSourceStore.state);
 
   useEffect(() => {
     ensureMediaSourceListener();
-    mediaSourceStore.subscribers.add(setKind);
-    setKind(mediaSourceStore.kind);
+    mediaSourceStore.subscribers.add(setState);
+    setState(mediaSourceStore.state);
 
     return () => {
-      mediaSourceStore.subscribers.delete(setKind);
+      mediaSourceStore.subscribers.delete(setState);
     };
   }, []);
 
-  return kind;
+  return state;
 }
+
+// Filter "Channel" pada halaman hasil pencarian YouTube (parameter sp).
+// Hasil pertama hampir selalu channel yang dimaksud.
+const YOUTUBE_CHANNEL_FILTER = "EgIQAg%3D%3D";
+
+// Nama channel dari SMTC kadang berakhiran " - Topic" (channel musik otomatis YouTube)
+const cleanChannelName = (name: string) =>
+  name.replace(/\s*-\s*Topic\s*$/i, "").trim();
 
 // Panah melingkar ala iOS (gobackward / goforward), digambar untuk arah maju.
 // Lingkaran terbuka 300° dengan celah di atas; ujung panah ada di sisi kiri celah.
@@ -964,132 +990,6 @@ const SeekButton: React.FC<{
   );
 };
 
-// ---- Teks berjalan (judul panjang) ----
-
-// Kecepatan geser (px per detik): pelan
-const MARQUEE_SPEED = 26;
-
-// Diam dulu setelah island dibuka / judul berganti (ms)
-const MARQUEE_START_DELAY = 1800;
-
-// Diam sebentar di awal setiap putaran berikutnya (ms)
-const MARQUEE_LOOP_DELAY = 1400;
-
-// Jarak antara akhir teks dan salinan berikutnya (px)
-const MARQUEE_GAP = 36;
-
-// Teks satu baris. Muat -> diam. Terlalu panjang -> diam sebentar, lalu berjalan
-// pelan ke kiri berulang-ulang, dengan tepi kiri/kanan memudar
-const MarqueeText: React.FC<{ text: string; className?: string }> = ({
-  text,
-  className = "",
-}) => {
-  const boxRef = useRef<HTMLDivElement>(null);
-  const textRef = useRef<HTMLSpanElement>(null);
-  const x = useMotionValue(0);
-
-  const [textWidth, setTextWidth] = useState(0);
-  const [overflow, setOverflow] = useState(false);
-  const [moving, setMoving] = useState(false);
-
-  // Ukur teks dan wadah. Diukur ulang saat ukuran berubah (mis. panel volume dibuka)
-  useLayoutEffect(() => {
-    const box = boxRef.current;
-    const el = textRef.current;
-    if (!box || !el) return;
-
-    const measure = () => {
-      const width = el.offsetWidth;
-      setTextWidth(width);
-      setOverflow(width > box.clientWidth + 1);
-    };
-
-    measure();
-
-    const observer = new ResizeObserver(measure);
-    observer.observe(box);
-    observer.observe(el);
-
-    return () => observer.disconnect();
-  }, [text]);
-
-  // Jalankan: diam -> geser satu putaran -> diam -> ulangi
-  useEffect(() => {
-    x.set(0);
-    setMoving(false);
-
-    if (!overflow || textWidth <= 0) return;
-
-    const distance = textWidth + MARQUEE_GAP;
-
-    let cancelled = false;
-    let timer: number | undefined;
-    let controls: { stop: () => void } | undefined;
-
-    const cycle = (delay: number) => {
-      timer = window.setTimeout(() => {
-        if (cancelled) return;
-
-        setMoving(true);
-
-        controls = animate(x, -distance, {
-          duration: distance / MARQUEE_SPEED,
-          ease: "linear",
-          onComplete: () => {
-            if (cancelled) return;
-
-            // Salinan kedua kini tepat di posisi awal, jadi reset tidak terlihat
-            x.set(0);
-            setMoving(false);
-            cycle(MARQUEE_LOOP_DELAY);
-          },
-        });
-      }, delay);
-    };
-
-    cycle(MARQUEE_START_DELAY);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      controls?.stop();
-      x.set(0);
-    };
-  }, [overflow, textWidth, text, x]);
-
-  // Tepi kanan selalu memudar saat teks terpotong; tepi kiri hanya saat bergerak
-  const mask = !overflow
-    ? undefined
-    : moving
-      ? "linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 16px), transparent 100%)"
-      : "linear-gradient(to right, #000 calc(100% - 16px), transparent 100%)";
-
-  return (
-    <div
-      ref={boxRef}
-      className={`relative overflow-hidden whitespace-nowrap ${className}`}
-      style={{ maskImage: mask, WebkitMaskImage: mask }}
-    >
-      <motion.div className="flex w-max" style={{ x }}>
-        <span ref={textRef} className="shrink-0">
-          {text}
-        </span>
-
-        {/* Salinan kedua agar putaran tersambung mulus */}
-        {overflow && (
-          <span
-            aria-hidden
-            className="shrink-0"
-            style={{ paddingLeft: MARQUEE_GAP }}
-          >
-            {text}
-          </span>
-        )}
-      </motion.div>
-    </div>
-  );
-};
-
 // Tampilan Spotify compact
 const CompactView: React.FC<{
   track: SpotifyTrack;
@@ -1121,6 +1021,7 @@ const ExpandedView: React.FC<{
   track: SpotifyTrack;
   palette: string[];
   sourceKind: MediaSourceKind;
+  sourceSite: MediaSourceSite;
   runCommand: (command: MediaCommand) => void;
   onSeek: (positionSecs: number) => void;
   onOpenLyrics: () => void;
@@ -1129,6 +1030,7 @@ const ExpandedView: React.FC<{
   track,
   palette,
   sourceKind,
+  sourceSite,
   runCommand,
   onSeek,
   onOpenLyrics,
@@ -1203,13 +1105,33 @@ const ExpandedView: React.FC<{
     position: 0,
   });
 
-  // Membuka pencarian artis di aplikasi Spotify desktop
+  // Apakah yang sedang diputar video YouTube (nama "artis" = nama channel)
+  const isYouTube = sourceSite === "youtube";
+
+  // Klik nama artis:
+  // - YouTube : buka channel (hasil pertama pencarian dengan filter Channel)
+  // - Lainnya : cari artis di aplikasi Spotify desktop (perilaku lama)
   const openArtist = (e: React.MouseEvent) => {
     e.stopPropagation();
 
     const artist = track.artist?.trim();
 
     if (!artist) return;
+
+    if (isYouTube) {
+      const channel = cleanChannelName(artist);
+
+      // Nama cadangan dari backend, bukan nama channel sungguhan
+      if (!channel || channel === "Unknown Artist") return;
+
+      openUrl(
+        `https://www.youtube.com/results?search_query=${encodeURIComponent(channel)}&sp=${YOUTUBE_CHANNEL_FILTER}`,
+      ).catch((error) =>
+        console.error("Gagal membuka channel YouTube:", error),
+      );
+
+      return;
+    }
 
     openUrl(`spotify:search:${encodeURIComponent(artist)}`).catch((error) =>
       console.error("Gagal membuka artis di Spotify:", error),
@@ -1446,14 +1368,18 @@ const ExpandedView: React.FC<{
             </div>
           </div>
 
-          {/* Nama artis */}
-          <div
-            role="button"
-            onClick={openArtist}
-            onMouseDown={(e) => e.preventDefault()}
-            className="mt-1 cursor-pointer truncate text-[12px] font-normal tracking-[-0.01em] text-white/55 transition hover:text-white"
-          >
-            {track.artist || "Unknown Artist"}
+          {/* Nama artis (di YouTube: nama channel, klik membuka channel).
+              Wadah flex hanya untuk tata letak; area klik selebar teksnya saja,
+              jadi ruang kosong di samping nama tidak ikut bisa diklik */}
+          <div className="mt-1 flex min-w-0">
+            <div
+              role="button"
+              onClick={openArtist}
+              onMouseDown={(e) => e.preventDefault()}
+              className="min-w-0 max-w-full cursor-pointer truncate text-[12px] font-normal tracking-[-0.01em] text-white/55 transition hover:text-white"
+            >
+              {track.artist || "Unknown Artist"}
+            </div>
           </div>
         </div>
       </div>
@@ -1636,8 +1562,13 @@ const viewVariants = {
 // Lebar di luar teks lirik: padding, album, jarak, spektrum, dan margin pudar
 const LYRIC_MINI_CHROME = 116;
 
-// Batas lebar pil untuk teks non-lirik (judul lagu / "Memuat lirik…")
+// Batas lebar pil untuk teks non-lirik (judul lagu / "Memuat lirik…").
+// Judul yang lebih panjang dari ini tidak lagi dipotong, tapi berjalan (marquee)
 const LYRIC_MINI_TITLE_MAX = 300;
+
+// Gaya teks pil lirik compact. Dipakai bersama oleh pengukur lebar (tak terlihat),
+// baris lirik, dan judul berjalan supaya ukurannya selalu persis sama
+const LYRIC_MINI_TEXT = "text-[12.5px] font-semibold tracking-[-0.01em]";
 
 const LyricMiniView: React.FC<{
   track: SpotifyTrack;
@@ -1646,15 +1577,17 @@ const LyricMiniView: React.FC<{
   index: number;
   onNeedWidth?: (px: number) => void;
 }> = ({ track, palette, lyrics, index, onNeedWidth }) => {
+  // Lirik asli tersedia? Kalau tidak (memuat / tidak ada lirik), yang tampil judul lagu
+  const hasLyricLine = lyrics.status === "ready";
+
   // Menentukan teks lirik yang ditampilkan
-  const text =
-    lyrics.status === "ready"
-      ? index >= 0
-        ? lyrics.lines[index].text || "♪"
-        : "♪"
-      : lyrics.status === "loading"
-        ? "Memuat lirik…"
-        : track.title;
+  const text = hasLyricLine
+    ? index >= 0
+      ? lyrics.lines[index].text || "♪"
+      : "♪"
+    : lyrics.status === "loading"
+      ? "Memuat lirik…"
+      : track.title;
 
   // Ukur lebar baris lirik, lalu laporkan agar pil bisa melebar
   const measureRef = useRef<HTMLSpanElement>(null);
@@ -1671,10 +1604,11 @@ const LyricMiniView: React.FC<{
 
     // Baris lirik asli: ikut lebar teks (batas atas diatur island seperti sebelumnya).
     // Teks lain (judul / memuat): dibatasi supaya tidak melebar berlebihan.
-    onNeedWidth?.(
-      lyrics.status === "ready" ? need : Math.min(need, LYRIC_MINI_TITLE_MAX),
-    );
-  }, [text, lyrics.status, onNeedWidth]);
+    onNeedWidth?.(hasLyricLine ? need : Math.min(need, LYRIC_MINI_TITLE_MAX));
+  }, [text, hasLyricLine, onNeedWidth]);
+
+  const fadeMask =
+    "linear-gradient(to right, transparent, #000 8%, #000 92%, transparent)";
 
   return (
     <div className="relative flex h-full w-full items-center gap-2 overflow-hidden px-[8px] text-white">
@@ -1682,7 +1616,7 @@ const LyricMiniView: React.FC<{
       <span
         ref={measureRef}
         aria-hidden
-        className="pointer-events-none invisible absolute left-0 top-0 whitespace-nowrap text-[12.5px] font-semibold tracking-[-0.01em]"
+        className={`pointer-events-none invisible absolute left-0 top-0 whitespace-nowrap ${LYRIC_MINI_TEXT}`}
       >
         {text}
       </span>
@@ -1700,49 +1634,60 @@ const LyricMiniView: React.FC<{
         )}
       </div>
 
-      {/* Kontainer teks lirik */}
+      {/* Kontainer teks lirik.
+          Baris lirik: pudar di kedua tepi. Judul: pudarnya diatur MarqueeText sendiri */}
       <div
         className="relative h-full min-w-0 flex-1 overflow-hidden"
-        style={{
-          WebkitMaskImage:
-            "linear-gradient(to right, transparent, #000 8%, #000 92%, transparent)",
-          maskImage:
-            "linear-gradient(to right, transparent, #000 8%, #000 92%, transparent)",
-        }}
+        style={
+          hasLyricLine
+            ? { WebkitMaskImage: fadeMask, maskImage: fadeMask }
+            : undefined
+        }
       >
-        {/* Animasi pergantian baris lirik */}
-        <AnimatePresence mode="popLayout" initial={false}>
-          <motion.div
-            key={`${index}:${text}`}
-            className="absolute inset-0 flex items-center justify-center px-1"
-            initial={{
-              opacity: 0,
-              y: 10,
-              filter: "blur(6px)",
-            }}
-            animate={{
-              opacity: 1,
-              y: 0,
-              filter: "blur(0px)",
-              transition: {
-                duration: 0.3,
-                ease: MORPH_EASE,
-              },
-            }}
-            exit={{
-              opacity: 0,
-              y: -10,
-              filter: "blur(6px)",
-              transition: {
-                duration: 0.18,
-              },
-            }}
-          >
-            <span className="truncate text-[12.5px] font-semibold tracking-[-0.01em]">
-              {text}
-            </span>
-          </motion.div>
-        </AnimatePresence>
+        {hasLyricLine ? (
+          // Animasi pergantian baris lirik
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.div
+              key={`${index}:${text}`}
+              className="absolute inset-0 flex items-center justify-center px-1"
+              initial={{
+                opacity: 0,
+                y: 10,
+                filter: "blur(6px)",
+              }}
+              animate={{
+                opacity: 1,
+                y: 0,
+                filter: "blur(0px)",
+                transition: {
+                  duration: 0.3,
+                  ease: MORPH_EASE,
+                },
+              }}
+              exit={{
+                opacity: 0,
+                y: -10,
+                filter: "blur(6px)",
+                transition: {
+                  duration: 0.18,
+                },
+              }}
+            >
+              <span className={`truncate ${LYRIC_MINI_TEXT}`}>{text}</span>
+            </motion.div>
+          </AnimatePresence>
+        ) : (
+          // Tidak ada lirik: judul lagu. Muat -> diam di tengah. Terlalu panjang ->
+          // diam dulu (MARQUEE_START_DELAY), lalu berjalan pelan seperti judul di
+          // player expanded
+          <div className="flex h-full w-full items-center px-1">
+            <MarqueeText
+              text={text}
+              center
+              className={`w-full ${LYRIC_MINI_TEXT}`}
+            />
+          </div>
+        )}
       </div>
 
       {/* Kontainer spektrum musik */}
@@ -1813,8 +1758,9 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
   // Mengambil warna album
   const palette = useAlbumPalette(track.albumArt);
 
-  // Musik atau video yang sedang diputar (menentukan jenis tombol prev/next)
-  const sourceKind = useMediaSourceKind();
+  // Musik atau video yang sedang diputar (menentukan jenis tombol prev/next),
+  // beserta situs asalnya (menentukan aksi klik nama artis / channel)
+  const { kind: sourceKind, site: sourceSite } = useMediaSource();
 
   // Mengambil posisi lagu realtime
   const { getPosition } = useLivePosition(track);
@@ -1972,6 +1918,7 @@ export const SpotifyWidget: React.FC<SpotifyWidgetProps> = ({
                     track={track}
                     palette={palette}
                     sourceKind={sourceKind}
+                    sourceSite={sourceSite}
                     runCommand={runCommand}
                     onSeek={handleSeek}
                     onOpenLyrics={() => onLyricsModeChange?.(true)}

@@ -2,6 +2,7 @@ import React, { useLayoutEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Languages, Music, Pause, Play } from "lucide-react";
 import { LyricsState, SpotifyTrack } from "../../types";
+import { MarqueeText } from "./MarqueeText";
 
 // Ikon lirik
 export const LyricsIcon: React.FC<{ size?: number }> = ({ size = 18 }) => (
@@ -160,9 +161,11 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
 
         {/* Judul dan artis */}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold tracking-[-0.02em]">
-            {track.title}
-          </div>
+          {/* Judul panjang: diam dulu, lalu berjalan pelan (sama seperti judul di player) */}
+          <MarqueeText
+            text={track.title}
+            className="text-[13px] font-semibold tracking-[-0.02em]"
+          />
           <div className="truncate text-[11px] font-medium text-white/55">
             {track.artist}
           </div>
@@ -170,7 +173,6 @@ export const LyricsView: React.FC<LyricsViewProps> = ({
 
         {/* Tombol terjemahan */}
         {canTranslate && (
-          
           <HeaderButton
             label="Terjemahan"
             active={showTranslation}
