@@ -3,8 +3,9 @@
  * Kegunaan: Tampilan jadwal salat bergaya aplikasi cuaca, latar hitam solid.
  *  - Latar selalu hitam pekat. Warna aksen (progress, kartu berikutnya, titik status)
  *    berganti halus mengikuti waktu salat: Subuh, Terbit, Dzuhur, Ashar, Maghrib, Isya.
- *  - Matahari dan bulan berjalan mengikuti waktu sebenarnya (terbit -> Maghrib, Maghrib -> terbit),
- *    dengan garis lintasan putus-putus yang sangat tipis.
+ *  - Lima waktu salat ditampilkan di lengkung simetris bertitik; matahari berjalan di
+ *    lengkung itu sesuai jam (bulan menggantikannya saat malam).
+ *  - Matahari dan bulan di latar juga berjalan mengikuti waktu sebenarnya (terbit -> Maghrib, Maghrib -> terbit).
  *  - Bulan memakai fase asli hari ini; bintang berkedip dan sesekali ada bintang jatuh.
  *  - Saat hujan: awan tipis, tetesan air jatuh, dan tetesan yang mengenai huruf/angka
  *    akan memercik, menempel, lalu menetes lagi dari bagian bawah huruf.
@@ -13,7 +14,7 @@
  */
 
 import React, { useEffect, useMemo, useRef } from "react";
-import { Loader2, MapPin } from "lucide-react";
+import { Loader2, MapPin, Moon } from "lucide-react";
 import {
   FIVE,
   PRAYER_LABEL,
@@ -396,6 +397,57 @@ const CLOUD_BLOBS: [number, number, number][] = [
 const GLYPH_TALL = /[A-Z0-9bdfhijklt]/;
 const GLYPH = /[A-Za-z0-9]/;
 
+// ---------------------------------------------------------------------------
+// Lengkung simetris lima waktu salat + posisi matahari sesuai jam.
+// ---------------------------------------------------------------------------
+
+const ARC_W = 224;
+const ARC_H = 46;
+const ARC_BASE = 42;
+const ARC_PEAK = 30;
+
+/** Titik tengah kolom ke-p (0 = Subuh ... 4 = Isya); p boleh pecahan. */
+const colX = (p: number) => ((p + 0.5) * ARC_W) / 5;
+
+/** Tinggi lengkung (parabola simetris) pada posisi x. */
+const arcY = (x: number) => {
+  const c = ARC_W / 2;
+  const k = (x - c) / c;
+  return ARC_BASE - ARC_PEAK * (1 - k * k);
+};
+
+/** Garis lengkung dari x0 ke x1 (untuk titik-titik putus). */
+const arcPath = (x0: number, x1: number) => {
+  if (x1 <= x0) return "";
+  let d = `M${x0.toFixed(1)} ${arcY(x0).toFixed(1)}`;
+  for (let x = x0 + 2; x < x1; x += 2) {
+    d += `L${x.toFixed(1)} ${arcY(x).toFixed(1)}`;
+  }
+  return `${d}L${x1.toFixed(1)} ${arcY(x1).toFixed(1)}`;
+};
+
+/**
+ * Posisi matahari di lengkung: 0 = Subuh ... 4 = Isya, dihitung linear
+ * di antara dua waktu salat. Sebelum Subuh dan sesudah Isya = malam.
+ */
+function arcProgress(
+  t: number,
+  times: number[],
+): { p: number; night: boolean } {
+  const last = times.length - 1;
+  if (t < times[0]) return { p: 0, night: true };
+  if (t >= times[last]) return { p: last, night: true };
+  for (let i = 0; i < last; i++) {
+    if (t < times[i + 1]) {
+      return {
+        p: i + (t - times[i]) / (times[i + 1] - times[i]),
+        night: false,
+      };
+    }
+  }
+  return { p: last, night: true };
+}
+
 interface PrayerViewProps {
   now: Date;
   prayer: PrayerState;
@@ -437,16 +489,30 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
     weather.temp === null ? "--°C" : `${Math.round(weather.temp)}°C`;
   const label = conditionLabel(weather.code, rain, thunder);
 
+  // Waktu simulasi (nyata kecuali diuji) untuk aksen dan matahari di lengkung.
+  const startRef = useRef(nowT);
+  const tSim = FORCE_PHASE
+    ? phaseTime(FORCE_PHASE, today)
+    : startRef.current + (nowT - startRef.current) * TIME_SPEED;
+
   // Warna aksen saat ini (mengikuti waktu salat).
   const fajrKey = today.fajr.getTime();
   const stops = useMemo(() => accentStops(today), [fajrKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const accent = sampleStops(
-    stops,
-    FORCE_PHASE ? phaseTime(FORCE_PHASE, today) : nowT,
-  ).accent;
+  const accent = sampleStops(stops, tSim).accent;
   const accentSolid = css(accent);
-  const accentSoft = css(accent, 0.2);
-  const accentRing = css(accent, 0.7);
+  const accentRing = css(accent, 0.75);
+
+  // Matahari berjalan di lengkung sesuai jam.
+  const times = FIVE.map((k) => today[k].getTime());
+  const arc = arcProgress(tSim, times);
+  const sunX = colX(arc.p);
+  const sunY = arcY(sunX);
+  const sunCol = mixRGB(
+    SUN_LOW,
+    SUN_HIGH,
+    clamp01(Math.sin((Math.PI * arc.p) / 4) * 1.8),
+  );
+  const trailEnd = arc.night ? (arc.p === 0 ? 0 : ARC_W) : sunX;
 
   const rootRef = useRef<HTMLDivElement>(null);
   const backRef = useRef<HTMLCanvasElement>(null);
@@ -613,25 +679,6 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
       });
     };
 
-    /** Lintasan putus-putus tipis tempat matahari/bulan berjalan. */
-    const drawArc = (height: number, vis: number) => {
-      bctx.save();
-      bctx.setLineDash([2, 6]);
-      bctx.lineCap = "round";
-      bctx.lineWidth = 1;
-      bctx.strokeStyle = `rgba(255,255,255,${0.1 * vis})`;
-      bctx.beginPath();
-      for (let i = 0; i <= 48; i++) {
-        const uu = i / 48;
-        const x = W * (0.06 + 0.88 * uu);
-        const y = H * 1.02 - Math.sin(Math.PI * uu) * H * height;
-        if (i === 0) bctx.moveTo(x, y);
-        else bctx.lineTo(x, y);
-      }
-      bctx.stroke();
-      bctx.restore();
-    };
-
     const drawSun = (
       x: number,
       y: number,
@@ -790,10 +837,6 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
       const sr = s.today.sunrise.getTime();
       const ss = s.today.maghrib.getTime();
       const DAY = 86400000;
-
-      // Lintasan tipis benda langit yang sedang aktif.
-      if (t >= sr && t <= ss) drawArc(0.86, vis);
-      else drawArc(0.8, vis);
 
       // Matahari: terbit -> Maghrib mengikuti waktu sebenarnya.
       const u = (t - sr) / (ss - sr);
@@ -1124,31 +1167,125 @@ export const PrayerView: React.FC<PrayerViewProps> = ({
           </div>
 
           <div className="flex w-[224px] shrink-0 flex-col justify-end">
-            <div className="grid grid-cols-5 gap-1">
-              {FIVE.map((key) => {
+            <div className="relative" style={{ width: ARC_W, height: ARC_H }}>
+              <svg
+                width={ARC_W}
+                height={ARC_H}
+                viewBox={`0 0 ${ARC_W} ${ARC_H}`}
+                aria-hidden="true"
+                className="absolute inset-0 overflow-visible"
+              >
+                <path
+                  d={arcPath(0, ARC_W)}
+                  fill="none"
+                  stroke="rgba(255,255,255,0.28)"
+                  strokeWidth={1.8}
+                  strokeLinecap="round"
+                  strokeDasharray="0.01 5.5"
+                />
+                {trailEnd > 0 && (
+                  <path
+                    d={arcPath(0, trailEnd)}
+                    fill="none"
+                    stroke={accentSolid}
+                    strokeOpacity={0.85}
+                    strokeWidth={1.8}
+                    strokeLinecap="round"
+                    strokeDasharray="0.01 5.5"
+                  />
+                )}
+                {FIVE.map((key, i) => {
+                  const x = colX(i);
+                  const y = arcY(x);
+                  const isNext = key === next.key;
+                  const passed = times[i] <= tSim;
+                  return (
+                    <g key={key}>
+                      {isNext && (
+                        <circle
+                          cx={x}
+                          cy={y}
+                          r={5}
+                          fill="none"
+                          stroke={accentRing}
+                          strokeWidth={1.2}
+                        />
+                      )}
+                      <circle
+                        cx={x}
+                        cy={y}
+                        r={isNext ? 2.8 : 2.6}
+                        fill={
+                          isNext
+                            ? accentSolid
+                            : passed
+                              ? "rgba(255,255,255,0.75)"
+                              : "rgba(255,255,255,0.4)"
+                        }
+                      />
+                    </g>
+                  );
+                })}
+              </svg>
+
+              {/* Matahari (siang) atau bulan (malam) yang berjalan di lengkung. */}
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute left-0 top-0 transition-transform duration-1000 ease-linear"
+                style={{
+                  width: 30,
+                  height: 30,
+                  transform: `translate(${sunX - 15}px, ${sunY - 15}px)`,
+                }}
+              >
+                {arc.night ? (
+                  <div
+                    className="flex h-full w-full items-center justify-center"
+                    style={{
+                      background:
+                        "radial-gradient(circle, rgba(205,215,255,0.28) 0%, rgba(205,215,255,0) 70%)",
+                    }}
+                  >
+                    <Moon size={13} className="fill-[#e6e9ff] text-[#e6e9ff]" />
+                  </div>
+                ) : (
+                  <div
+                    className="relative h-full w-full"
+                    style={{
+                      background: `radial-gradient(circle, ${css(sunCol, 0.5)} 0%, ${css(sunCol, 0)} 70%)`,
+                    }}
+                  >
+                    <span
+                      className="absolute left-1/2 top-1/2 h-[9px] w-[9px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+                      style={{
+                        background: css(sunCol),
+                        boxShadow: `0 0 0 2.5px ${css(sunCol, 0.28)}`,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-1 grid grid-cols-5">
+              {FIVE.map((key, i) => {
                 const isNext = key === next.key;
-                const passed = today[key].getTime() <= nowT;
+                const passed = times[i] <= tSim;
                 return (
                   <div
                     key={key}
-                    data-rain-box
-                    className="min-w-0 rounded-2xl py-1.5 text-center"
-                    style={{
-                      background: isNext
-                        ? accentSoft
-                        : "rgba(255,255,255,0.06)",
-                      boxShadow: isNext
-                        ? `inset 0 0 0 1px ${accentRing}`
-                        : "inset 0 0 0 1px rgba(255,255,255,0.08)",
-                      opacity: passed && !isNext ? 0.45 : 1,
-                    }}
+                    className="min-w-0 text-center"
+                    style={{ opacity: passed && !isNext ? 0.5 : 1 }}
                   >
                     <div
-                      className={`text-[9.5px] ${isNext ? "text-white" : "text-white/55"}`}
+                      className={`text-[9.5px] ${isNext ? "font-semibold text-white" : "text-white/55"}`}
                     >
                       {PRAYER_LABEL[key]}
                     </div>
-                    <div className="text-[12px] font-semibold tabular-nums">
+                    <div
+                      className={`text-[12px] tabular-nums ${isNext ? "font-semibold" : "font-medium text-white/75"}`}
+                      style={isNext ? { color: accentSolid } : undefined}
+                    >
                       {fmtTime(today[key], tz)}
                     </div>
                   </div>
